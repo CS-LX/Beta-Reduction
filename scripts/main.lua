@@ -81,6 +81,11 @@ local victoryPopup_ = nil
 local feedbackPanel_ = nil
 local feedbackLabel_ = nil
 
+-- 归约可视化状态
+local reductionPanel_ = nil
+local reductionStepsContainer_ = nil
+local reductionVisible_ = false
+
 -- 对话框状态（防止键盘事件穿透）
 local renameDialogOpen_ = false
 
@@ -440,6 +445,68 @@ function CreateCampaignLevelUI(levelId)
         children = { feedbackLabel_ },
     }
 
+    -- 归约可视化面板 (absolute 定位，覆盖在画布中央)
+    reductionStepsContainer_ = UI.Panel {
+        id = "reductionSteps",
+        width = "100%",
+        flexDirection = "column",
+        gap = 4,
+    }
+    reductionPanel_ = UI.Panel {
+        id = "reductionPanel",
+        position = "absolute",
+        top = 12,
+        left = "5%",
+        right = "5%",
+        bottom = 60,
+        borderRadius = 10,
+        backgroundColor = { 15, 18, 30, 240 },
+        borderWidth = 1,
+        borderColor = { 80, 140, 255, 120 },
+        flexDirection = "column",
+        visible = false,
+        children = {
+            -- 标题栏
+            UI.Panel {
+                width = "100%",
+                height = 36,
+                flexDirection = "row",
+                alignItems = "center",
+                paddingLeft = 12, paddingRight = 8,
+                backgroundColor = { 25, 35, 60, 200 },
+                borderBottom = 1,
+                borderColor = { 60, 80, 140, 100 },
+                children = {
+                    UI.Label {
+                        text = "运行过程",
+                        fontSize = 13,
+                        fontColor = { 140, 200, 255, 255 },
+                        flex = 1,
+                    },
+                    UI.Button {
+                        text = "×",
+                        variant = "ghost",
+                        size = "sm",
+                        onClick = function()
+                            HideReductionPanel()
+                        end,
+                    },
+                }
+            },
+            -- 步骤列表
+            UI.ScrollView {
+                width = "100%",
+                flex = 1,
+                paddingTop = 8,
+                paddingBottom = 8,
+                paddingLeft = 12,
+                paddingRight = 12,
+                children = { reductionStepsContainer_ },
+            },
+        }
+    }
+    reductionVisible_ = false
+
     -- 关卡信息/教程/提交面板
     campaignHUD_ = CreateCampaignInfoPanel(level)
 
@@ -509,7 +576,7 @@ function CreateCampaignLevelUI(levelId)
                             },
                         }
                     },
-                    -- 中间: 积木画布 + 浮动Toast
+                    -- 中间: 积木画布 + 浮动Toast + 归约可视化
                     UI.Panel {
                         flex = 1,
                         height = "100%",
@@ -517,6 +584,8 @@ function CreateCampaignLevelUI(levelId)
                             blockCanvas_,
                             -- 浮动反馈Toast (absolute定位在画布底部居中)
                             feedbackPanel_,
+                            -- 归约可视化面板 (absolute覆盖)
+                            reductionPanel_,
                         },
                     },
                     -- 右侧: 关卡信息 + Inspector
@@ -945,6 +1014,143 @@ function ShowCampaignFeedback(success, message)
     feedbackPanel_:SetVisible(true)
 end
 
+function HideReductionPanel()
+    if reductionPanel_ then
+        reductionPanel_:SetVisible(false)
+    end
+    reductionVisible_ = false
+end
+
+--- 显示归约可视化面板，展示每一步化简过程
+function ShowReductionVisualization(playerAST, testCases, allPassed)
+    if not reductionPanel_ or not reductionStepsContainer_ then return end
+
+    reductionStepsContainer_:ClearChildren()
+
+    -- 标题行：你的表达式
+    reductionStepsContainer_:AddChild(UI.Label {
+        text = "你的机器: " .. AST.toString(playerAST),
+        fontSize = 12,
+        fontColor = { 180, 220, 255, 255 },
+        paddingBottom = 8,
+    })
+
+    -- 对每个测试用例展示归约过程
+    local Verifier = require("Campaign.Verifier")
+    for i, tc in ipairs(testCases) do
+        -- 测试标题
+        local testTitle = "测试 " .. i .. ": "
+        if tc.input and #tc.input > 0 then
+            testTitle = testTitle .. "喂入 " .. tc.input
+        else
+            testTitle = testTitle .. "直接运行"
+        end
+
+        reductionStepsContainer_:AddChild(UI.Panel {
+            width = "100%", height = 1,
+            backgroundColor = { 60, 80, 140, 60 },
+            marginTop = 6, marginBottom = 6,
+        })
+        reductionStepsContainer_:AddChild(UI.Label {
+            text = testTitle,
+            fontSize = 11,
+            fontColor = { 200, 180, 120, 240 },
+            paddingBottom = 4,
+        })
+
+        -- 构建完整应用表达式
+        local inputTokens = Verifier._splitInputs(tc.input)
+        local expr = AST.deepClone(playerAST)
+        for _, inputStr in ipairs(inputTokens) do
+            local inputAST = Verifier.Parser.parse(inputStr)
+            if inputAST then
+                expr = AST.App(expr, inputAST)
+            end
+        end
+
+        -- 获取归约轨迹
+        local trace = Evaluator.trace(expr, 30)
+
+        -- 显示每步
+        for stepIdx, stepAST in ipairs(trace) do
+            local prefix = ""
+            local color = { 220, 230, 250, 200 }
+            if stepIdx == 1 then
+                prefix = "起始  "
+                color = { 160, 200, 255, 220 }
+            elseif stepIdx == #trace then
+                prefix = "结果  "
+                color = { 100, 255, 150, 255 }
+            else
+                prefix = " → "
+                color = { 200, 200, 220, 180 }
+            end
+
+            local stepStr = prefix .. AST.toString(stepAST)
+            reductionStepsContainer_:AddChild(UI.Label {
+                text = stepStr,
+                fontSize = 11,
+                fontColor = color,
+                paddingLeft = 8,
+                paddingTop = 2,
+                paddingBottom = 2,
+            })
+        end
+
+        -- 期望结果对比
+        local resultAST = trace[#trace]
+        local resultStr = resultAST and AST.toString(resultAST) or "?"
+        local expectStr = tc.expect
+        local match = false
+        if resultAST then
+            local expectAST = Verifier.Parser.parse(tc.expect)
+            if expectAST then
+                match = Verifier.alphaEquiv(resultAST, expectAST)
+                if not match then
+                    local expectReduced = Evaluator.reduceToNF(expectAST, 200)
+                    if expectReduced then
+                        match = Verifier.alphaEquiv(resultAST, expectReduced)
+                    end
+                end
+            end
+        end
+
+        local verdictColor = match and { 80, 255, 140, 255 } or { 255, 100, 80, 255 }
+        local verdictText = match and ("  期望 " .. expectStr .. " ✓") or ("  期望 " .. expectStr .. " ✗ 得到 " .. resultStr)
+        reductionStepsContainer_:AddChild(UI.Label {
+            text = verdictText,
+            fontSize = 11,
+            fontColor = verdictColor,
+            paddingLeft = 8,
+            paddingTop = 2,
+            paddingBottom = 4,
+        })
+    end
+
+    -- 底部总结
+    reductionStepsContainer_:AddChild(UI.Panel {
+        width = "100%", height = 1,
+        backgroundColor = { 60, 80, 140, 80 },
+        marginTop = 8, marginBottom = 6,
+    })
+    if allPassed then
+        reductionStepsContainer_:AddChild(UI.Label {
+            text = "全部通过！你的机器工作正确！",
+            fontSize = 13,
+            fontColor = { 80, 255, 140, 255 },
+        })
+    else
+        reductionStepsContainer_:AddChild(UI.Label {
+            text = "有测试未通过，观察上面的运行过程找找原因",
+            fontSize = 12,
+            fontColor = { 255, 180, 100, 240 },
+        })
+    end
+
+    reductionPanel_:SetVisible(true)
+    reductionVisible_ = true
+end
+
 -- ============================================================================
 -- 闯关提交答案
 -- ============================================================================
@@ -952,6 +1158,12 @@ end
 function SubmitCampaignAnswer()
     if appMode_ ~= "campaign_level" then return end
     if not blockCanvas_ then return end
+
+    -- 如果归约面板正在显示，先关闭它
+    if reductionVisible_ then
+        HideReductionPanel()
+        return
+    end
 
     -- 从画布获取根积木 → 转 AST
     local roots = blockCanvas_:GetRootBlocks()
@@ -972,11 +1184,19 @@ function SubmitCampaignAnswer()
     -- 验证
     local pass, msg = CampaignManager.submitAnswer(playerAST)
 
+    -- 获取当前关卡的测试用例
+    local level = CampaignManager.getCurrentLevel()
+        or LevelData.getLevelById(CampaignManager.getCurrentLevelId() or "")
+    local testCases = level and level.testCases or {}
+
+    -- 显示归约可视化 (让玩家看到运行过程)
+    if #testCases > 0 then
+        ShowReductionVisualization(playerAST, testCases, pass)
+    end
+
     if pass then
         ShowCampaignFeedback(true, msg)
         -- 延迟显示胜利弹窗
-        local level = CampaignManager.getCurrentLevel()
-            or LevelData.getLevelById(CampaignManager.getCurrentLevelId() or "")
         if level then
             ShowVictoryPopup(level)
         end

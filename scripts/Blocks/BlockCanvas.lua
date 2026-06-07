@@ -453,7 +453,7 @@ function BlockCanvas:_renderVarBlock(nvg, block, isSelected)
     nvgText(nvg, x + w / 2, y + h / 2, block.name)
 end
 
---- 抽象积木: C 形包裹容器
+--- 抽象积木: C 形包裹容器 (函数/机器)
 function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
     local x, y, w, h = block.x, block.y, block.w, block.h
     local c = BlockDefs.Colors.abstraction
@@ -477,18 +477,36 @@ function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
     nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 80))
     nvgFill(nvg)
 
-    -- "λparam" 文字
+    -- 左上角小标签: "函数"
     nvgFontFace(nvg, "sans")
+    nvgFontSize(nvg, 9)
+    nvgTextAlign(nvg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
+    nvgFillColor(nvg, nvgRGBA(200, 170, 255, 140))
+    nvgText(nvg, x + w - 6, y + HH / 2, "\xe2\x9a\x99 \xe5\x87\xbd\xe6\x95\xb0")
+
+    -- "λparam" 文字 + 输入标签
     nvgFontSize(nvg, 12)
     nvgTextAlign(nvg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
     nvgFillColor(nvg, nvgRGBA(255, 255, 255, 230))
-    nvgText(nvg, x + 8, y + HH / 2, "λ" .. block.param)
+    nvgText(nvg, x + 8, y + HH / 2, "\xce\xbb" .. block.param)
+
+    -- 输入口标示 (header 下方左侧小箭头)
+    nvgFontSize(nvg, 9)
+    nvgTextAlign(nvg, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
+    nvgFillColor(nvg, nvgRGBA(80, 200, 220, 180))
+    nvgText(nvg, x + leftThick + 4, y + HH + 2, "\xe2\x86\x93 \xe8\xbe\x93\xe5\x85\xa5 " .. block.param)
 
     -- 左侧 C 形竖线（视觉强调）
     nvgBeginPath(nvg)
     nvgRect(nvg, x, y + HH, leftThick, h - HH)
     nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 50))
     nvgFill(nvg)
+
+    -- 输出口标示 (底部)
+    nvgFontSize(nvg, 9)
+    nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_BOTTOM)
+    nvgFillColor(nvg, nvgRGBA(100, 255, 180, 150))
+    nvgText(nvg, x + w / 2, y + h - 2, "\xe2\x86\x92 \xe8\xbe\x93\xe5\x87\xba\xe7\xbb\x93\xe6\x9e\x9c")
 
     -- body slot (空时画虚线框)
     local slot = block.slots.body
@@ -499,22 +517,22 @@ function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
         local sh = slot.rh or BlockDefs.SLOT_MIN_H
         nvgBeginPath(nvg)
         nvgRoundedRect(nvg, sx, sy, sw, sh, 4)
-        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 15))
+        nvgFillColor(nvg, nvgRGBA(140, 100, 240, 20))
         nvgFill(nvg)
-        nvgStrokeColor(nvg, nvgRGBA(255, 255, 255, 40))
+        nvgStrokeColor(nvg, nvgRGBA(140, 100, 240, 60))
         nvgStrokeWidth(nvg, 1)
         nvgStroke(nvg)
-        -- "body" 占位文字
+        -- 占位文字: 引导用户
         nvgFontSize(nvg, 10)
         nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 60))
-        nvgText(nvg, sx + sw / 2, sy + sh / 2, "body")
+        nvgFillColor(nvg, nvgRGBA(200, 170, 255, 90))
+        nvgText(nvg, sx + sw / 2, sy + sh / 2, "\xe6\x8b\x96\xe5\x85\xa5\xe5\x86\x85\xe5\xae\xb9")
     else
         self:_renderBlock(nvg, slot.child)
     end
 end
 
---- 应用积木: 双槽咬合结构
+--- 应用积木: 双槽咬合结构 (调用/执行)
 function BlockCanvas:_renderAppBlock(nvg, block, isSelected)
     local x, y, w, h = block.x, block.y, block.w, block.h
     local c = BlockDefs.Colors.application
@@ -535,26 +553,39 @@ function BlockCanvas:_renderAppBlock(nvg, block, isSelected)
     nvgFillColor(nvg, nvgRGBA(255, 255, 255, 12))
     nvgFill(nvg)
 
-    -- 中间连接器符号 "▶"
+    -- 顶部小标签: "调用"
+    nvgFontFace(nvg, "sans")
+    nvgFontSize(nvg, 9)
+    nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
+    nvgFillColor(nvg, nvgRGBA(100, 220, 160, 140))
+    nvgText(nvg, x + w / 2, y + 2, "\xe2\x96\xb6 \xe8\xb0\x83\xe7\x94\xa8")
+
+    -- 中间连接器箭头
     local funcSlot = block.slots.func
     local argSlot = block.slots.arg
     local midX = x + (funcSlot.rx or 0) + (funcSlot.rw or 56) + BlockDefs.GAP
     local midY = y + h / 2
-    nvgFontFace(nvg, "sans")
-    nvgFontSize(nvg, 14)
+    nvgFontSize(nvg, 16)
     nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 200))
-    nvgText(nvg, midX + 8, midY, "->")
+    nvgFillColor(nvg, nvgRGBA(255, 200, 60, 200))
+    nvgText(nvg, midX + 8, midY, "\xe2\x86\x90")
 
-    -- func slot
-    self:_renderSlot(nvg, block, "func", "f")
-    -- arg slot
-    self:_renderSlot(nvg, block, "arg", "x")
+    -- 箭头下方说明
+    nvgFontSize(nvg, 8)
+    nvgFillColor(nvg, nvgRGBA(255, 200, 60, 120))
+    nvgText(nvg, midX + 8, midY + 12, "\xe5\x96\x82\xe5\x85\xa5")
+
+    -- func slot (左侧 - 函数/机器)
+    self:_renderSlot(nvg, block, "func", "\xe6\x94\xbe\xe5\x87\xbd\xe6\x95\xb0", {140, 100, 240})
+    -- arg slot (右侧 - 参数/材料)
+    self:_renderSlot(nvg, block, "arg", "\xe6\x94\xbe\xe5\x8f\x82\xe6\x95\xb0", {80, 200, 220})
 end
 
-function BlockCanvas:_renderSlot(nvg, block, slotKey, placeholder)
+function BlockCanvas:_renderSlot(nvg, block, slotKey, placeholder, hintColor)
     local slot = block.slots[slotKey]
     if not slot then return end
+
+    hintColor = hintColor or {255, 255, 255}
 
     if slot.child then
         self:_renderBlock(nvg, slot.child)
@@ -563,17 +594,21 @@ function BlockCanvas:_renderSlot(nvg, block, slotKey, placeholder)
         local sy = block.y + (slot.ry or 0)
         local sw = slot.rw or BlockDefs.SLOT_MIN_W
         local sh = slot.rh or BlockDefs.SLOT_MIN_H
+
+        -- 用色彩区分不同类型的插槽
         nvgBeginPath(nvg)
         nvgRoundedRect(nvg, sx, sy, sw, sh, 4)
-        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 15))
+        nvgFillColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 15))
         nvgFill(nvg)
-        nvgStrokeColor(nvg, nvgRGBA(255, 255, 255, 35))
+        nvgStrokeColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 50))
         nvgStrokeWidth(nvg, 1)
         nvgStroke(nvg)
-        -- 占位符
+
+        -- 占位符文字
+        nvgFontFace(nvg, "sans")
         nvgFontSize(nvg, 10)
         nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 50))
+        nvgFillColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 80))
         nvgText(nvg, sx + sw / 2, sy + sh / 2, placeholder)
     end
 end

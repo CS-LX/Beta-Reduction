@@ -5,12 +5,12 @@
 --   从 3 个基础积木 (变量/抽象/应用) 出发，逐步构建直到四则运算器。
 --   每关通过后，构建的表达式变成"预制积木"，后续关卡可直接使用。
 --
--- 5章 18关 (难度曲线更平缓):
---   第1章 认识 Lambda   (4关: 身份函数、应用入门、选择器K、选择器KI)
---   第2章 布尔逻辑      (5关: TRUE/FALSE 认识、NOT、AND、OR)
+-- 5章 22关 (极缓难度曲线，大量过渡练习):
+--   第1章 认识 Lambda   (5关: I、应用、K、KI、选择器实战)
+--   第2章 布尔逻辑      (8关: TRUE、FALSE、布尔选择实战、反转思维、NOT、链式选择、AND、OR)
 --   第3章 数字之源      (4关: ZERO、ONE、TWO、SUCC)
 --   第4章 算术运算      (3关: ADD、MUL、幂)
---   第5章 BOSS          (2关: PRED、组合运算)
+--   第5章 BOSS          (2关: PAIR、组合运算)
 -- ============================================================================
 
 local LevelData = {}
@@ -189,8 +189,51 @@ LevelData.levels = {
         },
     },
 
+    {
+        id = "1-5",
+        chapter = 1,
+        title = "选择游戏",
+        subtitle = "选择器实战",
+        description = "用 K 和 KI 来「选择」—— 体验选择器的力量。",
+        story = "你造出了两台选择机器：\n"
+              .. "  K  = 给两样东西，拿第一个\n"
+              .. "  KI = 给两样东西，拿第二个\n\n"
+              .. "现在来实际用用它们！\n"
+              .. "目标：构建一个表达式，从 apple 和 banana 中选出 apple。\n\n"
+              .. "提示：需要把 K 「应用」两次 ——\n"
+              .. "  先喂第一样东西，再喂第二样。",
+        tutorial = {
+            "回忆一下：",
+            "  K = λx.λy.x （选第一个）",
+            "",
+            "K 是「两步机器」，需要喂两次：",
+            "  第一次喂 apple → 得到「记住 apple 的机器」",
+            "  第二次喂 banana → 吐出 apple",
+            "",
+            "怎么表达「喂两次」？",
+            "  用两个嵌套的「应用」积木！",
+            "",
+            "做法：",
+            "  1. 放一个「应用」—— 外层",
+            "  2. 外层的 func 位再放一个「应用」—— 内层",
+            "  3. 内层: func=K, arg=变量 apple",
+            "  4. 外层: func=(K apple), arg=变量 banana",
+            "",
+            "结果: ((K apple) banana) → apple",
+        },
+        hint = "两个应用积木嵌套：内层 (K apple)，外层 ((K apple) banana)",
+        availableBlocks = { "var", "app" },
+        availablePrefabs = { "K", "KI" },
+        verifyMode = "behavioral",
+        testCases = {
+            { input = "", expect = "apple", raw = true },
+        },
+        verifyExact = "apple",
+        reward = nil,  -- 纯练习关
+    },
+
     -- ========================================================================
-    -- 第2章: 布尔逻辑 (5关)
+    -- 第2章: 布尔逻辑 (8关)
     -- ========================================================================
 
     {
@@ -264,42 +307,91 @@ LevelData.levels = {
     {
         id = "2-3",
         chapter = 2,
-        title = "反转术",
-        subtitle = "逻辑非 NOT",
-        description = "构建 NOT —— 把 TRUE 变 FALSE，把 FALSE 变 TRUE。",
-        story = "现在你有了 TRUE 和 FALSE，是时候学第一个逻辑操作了。\n\n"
-              .. "NOT 如何工作？\n"
-              .. "  既然 TRUE 选第一个、FALSE 选第二个，\n"
-              .. "  那么 NOT b = b FALSE TRUE\n"
-              .. "  （让 b 自己选，但把选项反过来！）",
+        title = "如果...那么...",
+        subtitle = "布尔选择实战",
+        description = "用 TRUE/FALSE 做一个选择：\n如果条件为真，选 apple；否则选 banana。",
+        story = "现在来体验布尔值最核心的能力：\n"
+              .. "  TRUE 和 FALSE 本身就是「选择器」！\n\n"
+              .. "就像 if-then-else：\n"
+              .. "  TRUE  apple banana → apple（条件为真，选第一个）\n"
+              .. "  FALSE apple banana → banana（条件为假，选第二个）\n\n"
+              .. "目标：构建 ((TRUE apple) banana)\n"
+              .. "让 TRUE 帮你选出 apple。",
         tutorial = {
-            "NOT 的关键洞察：",
-            "  布尔值本身就是选择函数！",
-            "  TRUE f s  → f  (选第一个)",
-            "  FALSE f s → s  (选第二个)",
+            "布尔值 = 选择器，这是核心洞察！",
             "",
-            "所以 NOT = λb. b FALSE TRUE",
-            "  当 b=TRUE:  TRUE FALSE TRUE → FALSE",
-            "  当 b=FALSE: FALSE FALSE TRUE → TRUE",
+            "TRUE = λt.λf.t = 选第一个",
+            "用法：((TRUE 选项A) 选项B) → 选项A",
             "",
-            "目标：构建 λb.(b FALSE TRUE)",
+            "这和编程里的 if-else 一模一样：",
+            "  if (条件) then A else B",
+            "  = ((条件 A) B)",
             "",
-            "构建提示：",
-            "  1. 放一个 λb 抽象",
-            "  2. body 里放一个「应用」积木",
-            "  3. 「应用」的左边再放一个「应用」",
-            "  4. 最内层应用: func=b, arg=FALSE",
-            "  5. 外层应用: func=(b FALSE), arg=TRUE",
+            "做法：",
+            "  1. 放一个外层「应用」",
+            "  2. 外层 func = 再放一个内层「应用」",
+            "  3. 内层: func=TRUE(预制), arg=变量 apple",
+            "  4. 外层: arg=变量 banana",
             "",
-            "注意：FALSE 和 TRUE 是预制积木，从左边面板拖入！",
+            "结果: ((TRUE apple) banana) → apple",
         },
-        hint = "λb. 然后 body 里构建 ((b FALSE) TRUE)，需要两个应用积木嵌套",
+        hint = "两个应用积木嵌套：内层(TRUE apple)，外层((TRUE apple) banana)",
+        availableBlocks = { "var", "app" },
+        availablePrefabs = { "TRUE", "FALSE" },
+        verifyMode = "behavioral",
+        testCases = {
+            { input = "", expect = "apple", raw = true },
+        },
+        verifyExact = "apple",
+        reward = nil,  -- 纯练习关，巩固 "布尔值=选择器" 的理解
+    },
+
+    {
+        id = "2-4",
+        chapter = 2,
+        title = "反转选项",
+        subtitle = "反转思维铺垫",
+        description = "如果把选项的顺序反过来呢？\n构建 ((TRUE banana) apple) 看看会发生什么。\n然后想想：怎样让 TRUE 的结果变成 banana？",
+        story = "上一关你用 TRUE 从 (apple, banana) 中选了 apple。\n\n"
+              .. "现在思考一个问题：\n"
+              .. "  如果我把两个选项的位置交换呢？\n"
+              .. "  ((TRUE banana) apple) 会得到什么？\n\n"
+              .. "答案是 banana！\n"
+              .. "因为 TRUE 永远选第一个——不管第一个是什么。\n\n"
+              .. "这就是 NOT 的核心思路：\n"
+              .. "  想把 TRUE 变 FALSE？\n"
+              .. "  让 TRUE 在 (FALSE, TRUE) 中选 → 选到 FALSE！\n\n"
+              .. "本关目标：构建一个表达式，让变量 b \n"
+              .. "在 FALSE 和 TRUE 之间选择（注意顺序是反的！）。\n"
+              .. "用 λb 包裹它，让它成为一个通用的翻转机器。",
+        tutorial = {
+            "核心洞察：交换选项 = 反转结果",
+            "",
+            "  ((TRUE  apple banana) → apple",
+            "  ((TRUE  banana apple) → banana  (选项反了!)",
+            "",
+            "所以「反转布尔值」的方法是：",
+            "  让布尔值 b 在 (FALSE, TRUE) 中选择",
+            "  如果 b=TRUE → 选第一个 → FALSE ✓",
+            "  如果 b=FALSE → 选第二个 → TRUE ✓",
+            "",
+            "目标：构建 λb.((b FALSE) TRUE)",
+            "",
+            "做法：",
+            "  1. 放一个 λb 抽象",
+            "  2. body 里放嵌套的两个应用积木",
+            "  3. 内层: func=变量b, arg=FALSE(预制)",
+            "  4. 外层: arg=TRUE(预制)",
+            "",
+            "恭喜——这其实就是 NOT！下一关正式命名。",
+        },
+        hint = "λb.((b FALSE) TRUE)：b 在反转的选项中做选择",
         availableBlocks = { "var", "abs", "app" },
         availablePrefabs = { "TRUE", "FALSE" },
         verifyMode = "behavioral",
         testCases = {
-            { input = "(λt.λf.t)", expect = "λt.λf.f" },   -- NOT TRUE = FALSE
-            { input = "(λt.λf.f)", expect = "λt.λf.t" },   -- NOT FALSE = TRUE
+            { input = "(λt.λf.t)", expect = "λt.λf.f" },   -- 输入TRUE → 输出FALSE
+            { input = "(λt.λf.f)", expect = "λt.λf.t" },   -- 输入FALSE → 输出TRUE
         },
         reward = {
             id = "NOT",
@@ -310,41 +402,95 @@ LevelData.levels = {
     },
 
     {
-        id = "2-4",
+        id = "2-5",
         chapter = 2,
-        title = "双重认证",
-        subtitle = "逻辑与 AND",
-        description = "构建 AND —— 两个都为真才为真。",
-        story = "AND 的思路：\n"
-              .. "  AND p q = p q FALSE\n"
-              .. "  如果 p 为真 → 结果看 q\n"
-              .. "  如果 p 为假 → 直接为假",
+        title = "反转术",
+        subtitle = "逻辑非 NOT (巩固)",
+        description = "你已经发明了 NOT！再来巩固一下。\n这次用预制积木 NOT 去翻转一个值。",
+        story = "上一关你亲手构建了 NOT = λb.((b FALSE) TRUE)。\n\n"
+              .. "现在来验证它真的能用：\n"
+              .. "  构建 (NOT TRUE)，验证结果是 FALSE。\n\n"
+              .. "这是一个简单的应用练习，\n"
+              .. "帮你确认 NOT 的工作方式。",
         tutorial = {
-            "AND 的编码：",
-            "  AND = λp.λq. p q FALSE",
+            "你已经在上一关亲手构建了 NOT。",
             "",
-            "逻辑：",
-            "  AND TRUE  q = TRUE q FALSE  → q   (取决于q)",
-            "  AND FALSE q = FALSE q FALSE → FALSE",
+            "现在来用它！",
+            "  构建 (NOT TRUE)：",
+            "  1. 放一个「应用」积木",
+            "  2. func = NOT (预制积木)",
+            "  3. arg = TRUE (预制积木)",
             "",
-            "构建方法：",
-            "  1. 放 λp 抽象",
-            "  2. body 里放 λq 抽象",
-            "  3. 最内层 body: ((p q) FALSE)",
-            "     两个应用积木嵌套，最内层 func=p arg=q",
-            "     外层 func=(p q) arg=FALSE",
-            "",
-            "目标：构建 λp.λq.(p q FALSE)",
+            "提交后观察归约过程：",
+            "  (NOT TRUE)",
+            "  = (λb.b FALSE TRUE) TRUE",
+            "  = TRUE FALSE TRUE",
+            "  = FALSE ✓",
         },
-        hint = "λp.λq. body 是 ((p q) FALSE)，内层应用 p 到 q，外层再应用到 FALSE",
+        hint = "只需要一个应用积木：func=NOT, arg=TRUE",
+        availableBlocks = { "app" },
+        availablePrefabs = { "NOT", "TRUE", "FALSE" },
+        verifyMode = "behavioral",
+        testCases = {
+            { input = "", expect = "λt.λf.f", raw = true },
+        },
+        reward = nil,  -- 纯巩固练习
+    },
+
+    {
+        id = "2-6",
+        chapter = 2,
+        title = "链式选择",
+        subtitle = "AND 的思维铺垫",
+        description = "AND 的核心思路：让第一个条件来决定要不要看第二个条件。\n"
+                   .. "如果第一个条件为假，直接返回假，不用看第二个。",
+        story = "在学 AND 之前，先理解「链式选择」：\n\n"
+              .. "想象你要同时满足两个条件：\n"
+              .. "  - 有门票 (p)\n"
+              .. "  - 有身份证 (q)\n\n"
+              .. "检查流程：\n"
+              .. "  1. 先看有没有门票 (p)\n"
+              .. "  2. 如果没门票 → 直接拒绝 (FALSE)\n"
+              .. "  3. 如果有门票 → 再看身份证 (q)\n\n"
+              .. "翻译成 Lambda：\n"
+              .. "  p 是选择器：p (看q) (直接FALSE)\n"
+              .. "  = p q FALSE\n\n"
+              .. "本关目标：构建一个表达式，实现\n"
+              .. "  「如果 p 为真则结果看 q，否则直接 FALSE」\n"
+              .. "  即 λp.λq.((p q) FALSE)",
+        tutorial = {
+            "链式选择 = AND 的本质",
+            "",
+            "逻辑流程（用自然语言）：",
+            "  if p then",
+            "    return q    -- p真时，结果取决于q",
+            "  else",
+            "    return FALSE -- p假时，直接假",
+            "  end",
+            "",
+            "翻译成 Lambda：",
+            "  p 本身就是 if-then-else！",
+            "  p (then分支) (else分支)",
+            "  = p q FALSE",
+            "",
+            "做法：",
+            "  1. 放 λp 抽象",
+            "  2. body 放 λq 抽象",
+            "  3. 最内层 body: ((p q) FALSE)",
+            "     内层应用: func=p, arg=q",
+            "     外层应用: func=(p q), arg=FALSE",
+            "",
+            "目标：构建 λp.λq.((p q) FALSE)",
+        },
+        hint = "λp.λq.((p q) FALSE)：让 p 在「看q」和「直接FALSE」之间选择",
         availableBlocks = { "var", "abs", "app" },
         availablePrefabs = { "TRUE", "FALSE" },
         verifyMode = "behavioral",
         testCases = {
-            { input = "(λt.λf.t) (λt.λf.t)", expect = "λt.λf.t" },  -- AND T T = T
-            { input = "(λt.λf.t) (λt.λf.f)", expect = "λt.λf.f" },  -- AND T F = F
-            { input = "(λt.λf.f) (λt.λf.t)", expect = "λt.λf.f" },  -- AND F T = F
-            { input = "(λt.λf.f) (λt.λf.f)", expect = "λt.λf.f" },  -- AND F F = F
+            { input = "(λt.λf.t) (λt.λf.t)", expect = "λt.λf.t" },  -- T T = T
+            { input = "(λt.λf.t) (λt.λf.f)", expect = "λt.λf.f" },  -- T F = F
+            { input = "(λt.λf.f) (λt.λf.t)", expect = "λt.λf.f" },  -- F T = F
+            { input = "(λt.λf.f) (λt.λf.f)", expect = "λt.λf.f" },  -- F F = F
         },
         reward = {
             id = "AND",
@@ -355,7 +501,46 @@ LevelData.levels = {
     },
 
     {
-        id = "2-5",
+        id = "2-7",
+        chapter = 2,
+        title = "双重认证",
+        subtitle = "AND 巩固练习",
+        description = "用 AND 来验证两个条件是否同时为真。\n构建 ((AND TRUE) FALSE) 看看结果。",
+        story = "上一关你构建了 AND = λp.λq.((p q) FALSE)。\n\n"
+              .. "现在来用它：\n"
+              .. "  构建 ((AND TRUE) FALSE)\n"
+              .. "  预期结果：FALSE（因为不是两个都为真）\n\n"
+              .. "观察归约过程，加深理解。",
+        tutorial = {
+            "用预制积木 AND 做一次实际运算：",
+            "",
+            "目标：构建 ((AND TRUE) FALSE)",
+            "",
+            "做法：",
+            "  1. 放一个外层「应用」",
+            "  2. 外层 func = 再放一个内层「应用」",
+            "  3. 内层: func=AND, arg=TRUE",
+            "  4. 外层: arg=FALSE",
+            "",
+            "提交后观察归约过程：",
+            "  ((AND TRUE) FALSE)",
+            "  → TRUE FALSE FALSE",
+            "  → FALSE ✓",
+            "",
+            "试试改成 ((AND TRUE) TRUE) 会得到什么？",
+        },
+        hint = "两个应用积木嵌套：内层(AND TRUE)，外层((AND TRUE) FALSE)",
+        availableBlocks = { "app" },
+        availablePrefabs = { "AND", "TRUE", "FALSE" },
+        verifyMode = "behavioral",
+        testCases = {
+            { input = "", expect = "λt.λf.f", raw = true },  -- AND TRUE FALSE = FALSE
+        },
+        reward = nil,  -- 纯巩固练习
+    },
+
+    {
+        id = "2-8",
         chapter = 2,
         title = "条条大路",
         subtitle = "逻辑或 OR",
