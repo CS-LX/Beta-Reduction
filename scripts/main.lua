@@ -79,6 +79,9 @@ local breadcrumbLabel_ = nil
 local campaignHUD_ = nil
 local victoryPopup_ = nil
 
+-- 对话框状态（防止键盘事件穿透）
+local renameDialogOpen_ = false
+
 -- ============================================================================
 -- 生命周期
 -- ============================================================================
@@ -1495,7 +1498,10 @@ function ShowRenameDialogFor(block)
         size = "sm",
         closeOnOverlay = true,
         closeOnEscape = true,
-        onClose = function(self) self:Destroy() end,
+        onClose = function(self)
+            renameDialogOpen_ = false
+            self:Destroy()
+        end,
     }
 
     modal:AddContent(UI.Panel {
@@ -1540,6 +1546,7 @@ function ShowRenameDialogFor(block)
     })
 
     modal:Open()
+    renameDialogOpen_ = true
 end
 
 -- ============================================================================
@@ -1649,7 +1656,9 @@ function HandleKeyDown(eventType, eventData)
             EnterMainMenu()
         end
     elseif key == KEY_DELETE or key == KEY_BACKSPACE then
-        DeleteSelected()
+        if not renameDialogOpen_ then
+            DeleteSelected()
+        end
     elseif key == KEY_F2 then
         ShowRenameDialog()
     elseif key == KEY_SPACE then
