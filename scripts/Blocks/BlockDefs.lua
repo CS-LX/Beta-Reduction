@@ -186,12 +186,15 @@ end
 --- 查找最近的合法吸附点
 ---@param dragBlock table   被拖拽的积木
 ---@param allBlocks table[] 画布上所有根积木
+---@param cursorX number|nil 鼠标光标的画布 X 坐标（若提供则用光标位置判定吸附）
+---@param cursorY number|nil 鼠标光标的画布 Y 坐标
 ---@return table|nil  { targetBlock, slotKey, dist }
-function BlockDefs.findSnapTarget(dragBlock, allBlocks)
+function BlockDefs.findSnapTarget(dragBlock, allBlocks, cursorX, cursorY)
     local best = nil
     local bestDist = BlockDefs.SNAP_RADIUS
-    local dcx = dragBlock.x + dragBlock.w / 2
-    local dcy = dragBlock.y + dragBlock.h / 2
+    -- 使用光标位置（如果提供），否则回退到积木中心
+    local dcx = cursorX or (dragBlock.x + dragBlock.w / 2)
+    local dcy = cursorY or (dragBlock.y + dragBlock.h / 2)
 
     for _, root in ipairs(allBlocks) do
         BlockDefs._searchSlots(root, dragBlock, dcx, dcy, bestDist, function(target, slotKey, dist)

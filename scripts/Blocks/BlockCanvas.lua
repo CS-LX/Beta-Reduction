@@ -237,7 +237,7 @@ function BlockCanvas:OnPointerMove(event)
         BlockDefs.layout(self.dragBlock_, self.dragBlock_.x, self.dragBlock_.y)
 
         -- 检测吸附
-        self.snapTarget_ = BlockDefs.findSnapTarget(self.dragBlock_, self.blocks_)
+        self.snapTarget_ = BlockDefs.findSnapTarget(self.dragBlock_, self.blocks_, cx, cy)
         return true
     end
 end
