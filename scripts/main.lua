@@ -1019,47 +1019,90 @@ function HideReductionPanel()
         reductionPanel_:SetVisible(false)
     end
     reductionVisible_ = false
+    -- 解冻画布
+    if blockCanvas_ then
+        blockCanvas_:SetFrozen(false)
+        blockCanvas_:ClearAnims()
+    end
 end
 
---- 显示归约可视化面板，展示每一步化简过程
-function ShowReductionVisualization(playerAST, testCases, allPassed)
-    if not reductionPanel_ or not reductionStepsContainer_ then return end
+-- ============================================================================
+-- 画布数据流动画
+-- ============================================================================
 
-    reductionStepsContainer_:ClearChildren()
+--- 在画布上播放数据流动画：输入飘入 → 积木闪烁（运算）→ 结果飘出
+function PlayCanvasFlowAnimation(rootBlock, playerAST, testCases, pass, msg, level)
+    if not blockCanvas_ then return end
 
-    -- 标题行：你的表达式
-    reductionStepsContainer_:AddChild(UI.Label {
-        text = "你的机器: " .. AST.toString(playerAST),
-        fontSize = 12,
-        fontColor = { 180, 220, 255, 255 },
-        paddingBottom = 8,
-    })
-
-    -- 对每个测试用例展示归约过程
     local Verifier = require("Campaign.Verifier")
+
+    -- 冻结画布
+    blockCanvas_:SetFrozen(true)
+    blockCanvas_:ClearAnims()
+
+    -- 获取根积木的位置信息
+    local bx, by, bw, bh = rootBlock.x, rootBlock.y, rootBlock.w, rootBlock.h
+
+    -- 输入从左上方飘入，输出从右下方飘出
+    local inStartX = bx - 80
+    local inStartY = by - 60
+    local inTargetX = bx + bw * 0.3
+    local inTargetY = by + bh * 0.5
+
+    local outStartX = bx + bw * 0.7
+    local outStartY = by + bh * 0.5
+    local outEndX = bx + bw + 80
+    local outEndY = by + bh + 60
+
+    local stepDuration = 0.6   -- 每段飘动时间
+    local flashDur = 0.5       -- 闪烁时间
+    local gapBetweenTests = 0.3
+
+    local totalDelay = 0.2     -- 初始小延迟
+
     for i, tc in ipairs(testCases) do
-        -- 测试标题
-        local testTitle = "测试 " .. i .. ": "
-        if tc.input and #tc.input > 0 then
-            testTitle = testTitle .. "喂入 " .. tc.input
+        -- 解析输入
+        local inputTokens = Verifier._splitInputs(tc.input)
+
+        -- 1) 输入方块飘入
+        if #inputTokens > 0 then
+            for idx, inputStr in ipairs(inputTokens) do
+                local delay = totalDelay + (idx - 1) * 0.25
+                blockCanvas_:AddFlowAnim(
+                    inputStr,
+                    inStartX - (idx - 1) * 30, inStartY,
+                    inTargetX, inTargetY,
+                    stepDuration,
+                    { 100, 200, 255 },  -- 蓝色（输入）
+                    delay
+                )
+            end
+            totalDelay = totalDelay + stepDuration + (#inputTokens - 1) * 0.25
         else
-            testTitle = testTitle .. "直接运行"
+            -- 无输入，直接运行
+            blockCanvas_:AddFlowAnim(
+                "run",
+                inStartX, inStartY,
+                inTargetX, inTargetY,
+                stepDuration,
+                { 180, 180, 100 },  -- 黄色
+                totalDelay
+            )
+            totalDelay = totalDelay + stepDuration
         end
 
-        reductionStepsContainer_:AddChild(UI.Panel {
-            width = "100%", height = 1,
-            backgroundColor = { 60, 80, 140, 60 },
-            marginTop = 6, marginBottom = 6,
-        })
-        reductionStepsContainer_:AddChild(UI.Label {
-            text = testTitle,
-            fontSize = 11,
-            fontColor = { 200, 180, 120, 240 },
-            paddingBottom = 4,
-        })
+        -- 2) 积木闪烁（表示运算/归约进行中）
+        totalDelay = totalDelay + 0.1
+        -- 通过延迟 flow 间接同步 flash（flashBlock 没有 delay 参数，用 flowAnim 间接触发）
+        blockCanvas_:AddFlashBlock(rootBlock, flashDur, { 200, 160, 255 })
+        -- 由于 flash 没有 delay，手动偏移 flash elapsed
+        local flashEntry = blockCanvas_.flashBlocks_[#blockCanvas_.flashBlocks_]
+        if flashEntry then
+            flashEntry.elapsed = -totalDelay
+        end
+        totalDelay = totalDelay + flashDur
 
-        -- 构建完整应用表达式
-        local inputTokens = Verifier._splitInputs(tc.input)
+        -- 3) 计算结果
         local expr = AST.deepClone(playerAST)
         for _, inputStr in ipairs(inputTokens) do
             local inputAST = Verifier.Parser.parse(inputStr)
@@ -1067,88 +1110,45 @@ function ShowReductionVisualization(playerAST, testCases, allPassed)
                 expr = AST.App(expr, inputAST)
             end
         end
+        local result = Evaluator.reduceToNF(expr, 200)
+        local resultStr = result and AST.toString(result) or "?"
 
-        -- 获取归约轨迹
-        local trace = Evaluator.trace(expr, 30)
-
-        -- 显示每步
-        for stepIdx, stepAST in ipairs(trace) do
-            local prefix = ""
-            local color = { 220, 230, 250, 200 }
-            if stepIdx == 1 then
-                prefix = "起始  "
-                color = { 160, 200, 255, 220 }
-            elseif stepIdx == #trace then
-                prefix = "结果  "
-                color = { 100, 255, 150, 255 }
-            else
-                prefix = " → "
-                color = { 200, 200, 220, 180 }
-            end
-
-            local stepStr = prefix .. AST.toString(stepAST)
-            reductionStepsContainer_:AddChild(UI.Label {
-                text = stepStr,
-                fontSize = 11,
-                fontColor = color,
-                paddingLeft = 8,
-                paddingTop = 2,
-                paddingBottom = 2,
-            })
-        end
-
-        -- 期望结果对比
-        local resultAST = trace[#trace]
-        local resultStr = resultAST and AST.toString(resultAST) or "?"
-        local expectStr = tc.expect
+        -- 4) 结果方块飘出
+        totalDelay = totalDelay + 0.1
+        local expectAST = Verifier.Parser.parse(tc.expect)
         local match = false
-        if resultAST then
-            local expectAST = Verifier.Parser.parse(tc.expect)
-            if expectAST then
-                match = Verifier.alphaEquiv(resultAST, expectAST)
-                if not match then
-                    local expectReduced = Evaluator.reduceToNF(expectAST, 200)
-                    if expectReduced then
-                        match = Verifier.alphaEquiv(resultAST, expectReduced)
-                    end
+        if result and expectAST then
+            match = Verifier.alphaEquiv(result, expectAST)
+            if not match then
+                local expectReduced = Evaluator.reduceToNF(expectAST, 200)
+                if expectReduced then
+                    match = Verifier.alphaEquiv(result, expectReduced)
                 end
             end
         end
 
-        local verdictColor = match and { 80, 255, 140, 255 } or { 255, 100, 80, 255 }
-        local verdictText = match and ("  期望 " .. expectStr .. " ✓") or ("  期望 " .. expectStr .. " ✗ 得到 " .. resultStr)
-        reductionStepsContainer_:AddChild(UI.Label {
-            text = verdictText,
-            fontSize = 11,
-            fontColor = verdictColor,
-            paddingLeft = 8,
-            paddingTop = 2,
-            paddingBottom = 4,
-        })
+        local outColor = match and { 100, 255, 160 } or { 255, 100, 100 }
+        blockCanvas_:AddFlowAnim(
+            resultStr,
+            outStartX, outStartY,
+            outEndX, outEndY,
+            stepDuration,
+            outColor,
+            totalDelay
+        )
+        totalDelay = totalDelay + stepDuration + gapBetweenTests
     end
 
-    -- 底部总结
-    reductionStepsContainer_:AddChild(UI.Panel {
-        width = "100%", height = 1,
-        backgroundColor = { 60, 80, 140, 80 },
-        marginTop = 8, marginBottom = 6,
-    })
-    if allPassed then
-        reductionStepsContainer_:AddChild(UI.Label {
-            text = "全部通过！你的机器工作正确！",
-            fontSize = 13,
-            fontColor = { 80, 255, 140, 255 },
-        })
-    else
-        reductionStepsContainer_:AddChild(UI.Label {
-            text = "有测试未通过，观察上面的运行过程找找原因",
-            fontSize = 12,
-            fontColor = { 255, 180, 100, 240 },
-        })
-    end
-
-    reductionPanel_:SetVisible(true)
-    reductionVisible_ = true
+    -- 动画完成后的回调
+    blockCanvas_:SetFlowCompleteCallback(function()
+        blockCanvas_:SetFrozen(false)
+        if pass then
+            ShowCampaignFeedback(true, msg)
+            if level then ShowVictoryPopup(level) end
+        else
+            ShowCampaignFeedback(false, msg)
+        end
+    end)
 end
 
 -- ============================================================================
@@ -1159,9 +1159,8 @@ function SubmitCampaignAnswer()
     if appMode_ ~= "campaign_level" then return end
     if not blockCanvas_ then return end
 
-    -- 如果归约面板正在显示，先关闭它
-    if reductionVisible_ then
-        HideReductionPanel()
+    -- 如果画布正在播放动画，忽略重复提交
+    if blockCanvas_:IsFrozen() or blockCanvas_:HasActiveAnims() then
         return
     end
 
@@ -1189,19 +1188,17 @@ function SubmitCampaignAnswer()
         or LevelData.getLevelById(CampaignManager.getCurrentLevelId() or "")
     local testCases = level and level.testCases or {}
 
-    -- 显示归约可视化 (让玩家看到运行过程)
+    -- 在画布上播放数据流动画
     if #testCases > 0 then
-        ShowReductionVisualization(playerAST, testCases, pass)
-    end
-
-    if pass then
-        ShowCampaignFeedback(true, msg)
-        -- 延迟显示胜利弹窗
-        if level then
-            ShowVictoryPopup(level)
-        end
+        PlayCanvasFlowAnimation(roots[1], playerAST, testCases, pass, msg, level)
     else
-        ShowCampaignFeedback(false, msg)
+        -- 无测试用例，直接反馈
+        if pass then
+            ShowCampaignFeedback(true, msg)
+            if level then ShowVictoryPopup(level) end
+        else
+            ShowCampaignFeedback(false, msg)
+        end
     end
 end
 

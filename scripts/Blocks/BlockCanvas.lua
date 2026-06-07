@@ -44,6 +44,14 @@ function BlockCanvas:Init(props)
     self.time_ = 0
     self.snapAnims_ = {}    -- { block, fromX, fromY, toX, toY, elapsed, duration }
 
+    -- 冻结状态（运行动画时禁止交互）
+    self.frozen_ = false
+
+    -- 数据流动画
+    self.flowAnims_ = {}      -- { text, x, y, toX, toY, elapsed, duration, color, opacity, scale }
+    self.flashBlocks_ = {}    -- { block, elapsed, duration, color } 积木闪烁效果
+    self.flowCallback_ = nil  -- 所有动画播完后的回调
+
     -- 双击检测
     self.lastClickTime_ = 0
     self.lastClickBlock_ = nil
@@ -87,6 +95,76 @@ end
 function BlockCanvas:GetSelectedAST()
     if not self.selectedBlock_ then return nil end
     return BlockDefs.toAST(self.selectedBlock_)
+end
+
+--- 冻结/解冻画布（冻结时禁止所有交互）
+function BlockCanvas:SetFrozen(frozen)
+    self.frozen_ = frozen
+    if frozen then
+        self.isDragging_ = false
+        self.dragBlock_ = nil
+        self.isPanning_ = false
+        self.snapTarget_ = nil
+    end
+end
+
+function BlockCanvas:IsFrozen()
+    return self.frozen_
+end
+
+--- 添加数据流动画（胶囊方块从 from 飘到 to）
+---@param text string 显示文本
+---@param fromX number 起始 X（画布坐标）
+---@param fromY number 起始 Y
+---@param toX number 目标 X
+---@param toY number 目标 Y
+---@param duration number 持续时间（秒）
+---@param color? number[] RGBA 颜色
+---@param delay? number 延迟开始（秒）
+function BlockCanvas:AddFlowAnim(text, fromX, fromY, toX, toY, duration, color, delay)
+    table.insert(self.flowAnims_, {
+        text = text,
+        fromX = fromX, fromY = fromY,
+        toX = toX, toY = toY,
+        elapsed = -(delay or 0),  -- 负值表示延迟等待
+        duration = duration or 0.5,
+        color = color or { 100, 220, 255 },
+        alive = true,
+    })
+end
+
+--- 添加积木闪烁效果
+function BlockCanvas:AddFlashBlock(block, duration, color)
+    table.insert(self.flashBlocks_, {
+        block = block,
+        elapsed = 0,
+        duration = duration or 0.4,
+        color = color or { 255, 255, 100 },
+        alive = true,
+    })
+end
+
+--- 设置动画全部完成后的回调
+function BlockCanvas:SetFlowCompleteCallback(fn)
+    self.flowCallback_ = fn
+end
+
+--- 清除所有动画
+function BlockCanvas:ClearAnims()
+    self.flowAnims_ = {}
+    self.flashBlocks_ = {}
+    self.flowCallback_ = nil
+end
+
+--- 检查是否有动画在播放
+function BlockCanvas:HasActiveAnims()
+    for _, a in ipairs(self.flowAnims_) do
+        if a.alive then return true end
+    end
+    for _, f in ipairs(self.flashBlocks_) do
+        if f.alive then return true end
+    end
+    return false
 end
 
 --- 清空画布
@@ -158,6 +236,7 @@ end
 
 function BlockCanvas:OnPointerDown(event)
     Widget.OnPointerDown(self, event)
+    if self.frozen_ then return true end
     local cx, cy = self:ScreenToCanvas(event.x, event.y)
 
     -- 右键/中键: 平移画布
@@ -217,6 +296,7 @@ end
 
 function BlockCanvas:OnPointerMove(event)
     Widget.OnPointerMove(self, event)
+    if self.frozen_ then return true end
 
     if self.isPanning_ then
         local dx = event.x - self.lastPanX_
@@ -244,6 +324,7 @@ end
 
 function BlockCanvas:OnPointerUp(event)
     Widget.OnPointerUp(self, event)
+    if self.frozen_ then return true end
 
     if self.isPanning_ then
         self.isPanning_ = false
@@ -309,6 +390,41 @@ end
 
 function BlockCanvas:Update(dt)
     self.time_ = (self.time_ or 0) + dt
+
+    -- 更新数据流动画
+    local anyAlive = false
+    for _, a in ipairs(self.flowAnims_) do
+        if a.alive then
+            a.elapsed = a.elapsed + dt
+            if a.elapsed >= a.duration then
+                a.alive = false
+            else
+                anyAlive = true
+            end
+        end
+    end
+    -- 更新闪烁动画
+    for _, f in ipairs(self.flashBlocks_) do
+        if f.alive then
+            f.elapsed = f.elapsed + dt
+            if f.elapsed >= f.duration then
+                f.alive = false
+            else
+                anyAlive = true
+            end
+        end
+    end
+    -- 所有动画完成后触发回调
+    if not anyAlive and self.flowCallback_ then
+        -- 确认确实有过动画（非空列表）
+        if #self.flowAnims_ > 0 or #self.flashBlocks_ > 0 then
+            local cb = self.flowCallback_
+            self.flowCallback_ = nil
+            self.flowAnims_ = {}
+            self.flashBlocks_ = {}
+            cb()
+        end
+    end
 end
 
 -- ============================================================================
@@ -343,6 +459,80 @@ function BlockCanvas:Render(nvg)
     -- 渲染所有积木
     for _, block in ipairs(self.blocks_) do
         self:_renderBlock(nvg, block)
+    end
+
+    -- 渲染积木闪烁效果
+    for _, f in ipairs(self.flashBlocks_) do
+        if f.alive and f.elapsed >= 0 then
+            local t = f.elapsed / f.duration
+            -- 脉冲衰减: 先亮后暗
+            local pulse = math.sin(t * math.pi) * 0.7
+            local alpha = math.floor(pulse * 180)
+            if alpha > 0 then
+                local b = f.block
+                nvgBeginPath(nvg)
+                nvgRoundedRect(nvg, b.x - 2, b.y - 2, b.w + 4, b.h + 4, 10)
+                nvgFillColor(nvg, nvgRGBA(f.color[1], f.color[2], f.color[3], alpha))
+                nvgFill(nvg)
+            end
+        end
+    end
+
+    -- 渲染数据流动画（飘动胶囊）
+    for _, a in ipairs(self.flowAnims_) do
+        if a.alive and a.elapsed >= 0 then
+            local t = a.elapsed / a.duration
+            -- ease-out cubic
+            local et = 1 - (1 - t) * (1 - t) * (1 - t)
+            local cx = a.fromX + (a.toX - a.fromX) * et
+            local cy = a.fromY + (a.toY - a.fromY) * et
+            -- 轻微弧形偏移
+            local arcOffset = math.sin(et * math.pi) * 20
+            cy = cy - arcOffset
+
+            -- 透明度：出现 → 保持 → 微弱消散
+            local alpha = 240
+            if t < 0.15 then
+                alpha = math.floor(t / 0.15 * 240)
+            elseif t > 0.85 then
+                alpha = math.floor((1 - t) / 0.15 * 240)
+            end
+
+            -- 缩放
+            local sc = 1.0
+            if t < 0.1 then sc = 0.5 + t / 0.1 * 0.5 end
+
+            -- 绘制胶囊
+            local tw = math.max(40, #a.text * 8 + 16)
+            local th = 22
+            nvgSave(nvg)
+            nvgTranslate(nvg, cx, cy)
+            nvgScale(nvg, sc, sc)
+            nvgBeginPath(nvg)
+            nvgRoundedRect(nvg, -tw / 2, -th / 2, tw, th, th / 2)
+            nvgFillColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], math.floor(alpha * 0.4)))
+            nvgFill(nvg)
+            nvgStrokeColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], alpha))
+            nvgStrokeWidth(nvg, 1.5)
+            nvgStroke(nvg)
+
+            -- 文字
+            nvgFontFace(nvg, "sans")
+            nvgFontSize(nvg, 11)
+            nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+            nvgFillColor(nvg, nvgRGBA(255, 255, 255, alpha))
+            nvgText(nvg, 0, 0, a.text)
+            nvgRestore(nvg)
+        end
+    end
+
+    -- 冻结遮罩
+    if self.frozen_ and #self.flowAnims_ == 0 and #self.flashBlocks_ == 0 then
+        -- 没有动画时轻微变暗提示冻结
+        nvgBeginPath(nvg)
+        nvgRect(nvg, -9999, -9999, 99999, 99999)
+        nvgFillColor(nvg, nvgRGBA(0, 0, 0, 30))
+        nvgFill(nvg)
     end
 
     nvgRestore(nvg)
@@ -458,57 +648,43 @@ function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
     local x, y, w, h = block.x, block.y, block.w, block.h
     local c = BlockDefs.Colors.abstraction
     local HH = BlockDefs.HEADER_H
-    local leftThick = 10
+    local leftThick = 6
     local rad = 8
 
-    -- 整体 C 形路径（使用圆角矩形近似）
+    -- 整体轮廓（只描边，不填充 body 区）
     nvgBeginPath(nvg)
     nvgRoundedRect(nvg, x, y, w, h, rad)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 40))
-    nvgFill(nvg)
-    nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], isSelected and 240 or 140))
-    nvgStrokeWidth(nvg, isSelected and 2 or 1.2)
+    nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], isSelected and 240 or 120))
+    nvgStrokeWidth(nvg, isSelected and 2 or 1)
     nvgStroke(nvg)
 
     -- Header 区域
     nvgBeginPath(nvg)
     nvgRoundedRect(nvg, x, y, w, HH, rad)
     nvgRect(nvg, x, y + HH - rad, w, rad)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 80))
+    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 70))
     nvgFill(nvg)
 
-    -- 左上角小标签: "函数"
+    -- "λparam" 文字
     nvgFontFace(nvg, "sans")
-    nvgFontSize(nvg, 9)
-    nvgTextAlign(nvg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
-    nvgFillColor(nvg, nvgRGBA(200, 170, 255, 140))
-    nvgText(nvg, x + w - 6, y + HH / 2, "\xe2\x9a\x99 \xe5\x87\xbd\xe6\x95\xb0")
-
-    -- "λparam" 文字 + 输入标签
-    nvgFontSize(nvg, 12)
+    nvgFontSize(nvg, 13)
     nvgTextAlign(nvg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 230))
+    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 240))
     nvgText(nvg, x + 8, y + HH / 2, "\xce\xbb" .. block.param)
 
-    -- 输入口标示 (header 下方左侧小箭头)
-    nvgFontSize(nvg, 9)
-    nvgTextAlign(nvg, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
-    nvgFillColor(nvg, nvgRGBA(80, 200, 220, 180))
-    nvgText(nvg, x + leftThick + 4, y + HH + 2, "\xe2\x86\x93 \xe8\xbe\x93\xe5\x85\xa5 " .. block.param)
-
-    -- 左侧 C 形竖线（视觉强调）
+    -- 左侧色带（输入指示，用颜色代替文字）
     nvgBeginPath(nvg)
-    nvgRect(nvg, x, y + HH, leftThick, h - HH)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 50))
+    nvgRoundedRect(nvg, x, y + HH, leftThick, h - HH, 0)
+    nvgFillColor(nvg, nvgRGBA(80, 200, 220, 60))
     nvgFill(nvg)
 
-    -- 输出口标示 (底部)
-    nvgFontSize(nvg, 9)
-    nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_BOTTOM)
-    nvgFillColor(nvg, nvgRGBA(100, 255, 180, 150))
-    nvgText(nvg, x + w / 2, y + h - 2, "\xe2\x86\x92 \xe8\xbe\x93\xe5\x87\xba\xe7\xbb\x93\xe6\x9e\x9c")
+    -- 底部输出色带（用颜色代替文字）
+    nvgBeginPath(nvg)
+    nvgRoundedRect(nvg, x, y + h - 3, w, 3, 0)
+    nvgFillColor(nvg, nvgRGBA(100, 255, 180, 50))
+    nvgFill(nvg)
 
-    -- body slot (空时画虚线框)
+    -- body slot
     local slot = block.slots.body
     if not slot.child then
         local sx = x + (slot.rx or 0)
@@ -517,22 +693,22 @@ function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
         local sh = slot.rh or BlockDefs.SLOT_MIN_H
         nvgBeginPath(nvg)
         nvgRoundedRect(nvg, sx, sy, sw, sh, 4)
-        nvgFillColor(nvg, nvgRGBA(140, 100, 240, 20))
+        nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 15))
         nvgFill(nvg)
-        nvgStrokeColor(nvg, nvgRGBA(140, 100, 240, 60))
+        nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], 40))
         nvgStrokeWidth(nvg, 1)
         nvgStroke(nvg)
-        -- 占位文字: 引导用户
+        -- 简洁占位文字
         nvgFontSize(nvg, 10)
         nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(nvg, nvgRGBA(200, 170, 255, 90))
-        nvgText(nvg, sx + sw / 2, sy + sh / 2, "\xe6\x8b\x96\xe5\x85\xa5\xe5\x86\x85\xe5\xae\xb9")
+        nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 60))
+        nvgText(nvg, sx + sw / 2, sy + sh / 2, "body")
     else
         self:_renderBlock(nvg, slot.child)
     end
 end
 
---- 应用积木: 双槽咬合结构 (调用/执行)
+--- 应用积木: 双槽水平排列 (函数调用)
 function BlockCanvas:_renderAppBlock(nvg, block, isSelected)
     local x, y, w, h = block.x, block.y, block.w, block.h
     local c = BlockDefs.Colors.application
@@ -541,51 +717,41 @@ function BlockCanvas:_renderAppBlock(nvg, block, isSelected)
     -- 背景
     nvgBeginPath(nvg)
     nvgRoundedRect(nvg, x, y, w, h, rad)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 40))
+    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 35))
     nvgFill(nvg)
-    nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], isSelected and 240 or 140))
-    nvgStrokeWidth(nvg, isSelected and 2 or 1.2)
+    nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], isSelected and 240 or 120))
+    nvgStrokeWidth(nvg, isSelected and 2 or 1)
     nvgStroke(nvg)
 
     -- 上高光
     nvgBeginPath(nvg)
-    nvgRoundedRect(nvg, x + 1, y + 1, w - 2, h * 0.35, rad)
-    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 12))
+    nvgRoundedRect(nvg, x + 1, y + 1, w - 2, h * 0.3, rad)
+    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 10))
     nvgFill(nvg)
 
-    -- 顶部小标签: "调用"
-    nvgFontFace(nvg, "sans")
-    nvgFontSize(nvg, 9)
-    nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
-    nvgFillColor(nvg, nvgRGBA(100, 220, 160, 140))
-    nvgText(nvg, x + w / 2, y + 2, "\xe2\x96\xb6 \xe8\xb0\x83\xe7\x94\xa8")
-
-    -- 中间连接器箭头
+    -- 中间连接三角（简洁的方向指示，替代文字箭头）
     local funcSlot = block.slots.func
-    local argSlot = block.slots.arg
-    local midX = x + (funcSlot.rx or 0) + (funcSlot.rw or 56) + BlockDefs.GAP
+    local midX = x + (funcSlot.rx or 0) + (funcSlot.rw or 56) + BlockDefs.GAP * 0.5
     local midY = y + h / 2
-    nvgFontSize(nvg, 16)
-    nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-    nvgFillColor(nvg, nvgRGBA(255, 200, 60, 200))
-    nvgText(nvg, midX + 8, midY, "\xe2\x86\x90")
+    nvgBeginPath(nvg)
+    nvgMoveTo(nvg, midX + 2, midY - 4)
+    nvgLineTo(nvg, midX + 8, midY)
+    nvgLineTo(nvg, midX + 2, midY + 4)
+    nvgClosePath(nvg)
+    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 100))
+    nvgFill(nvg)
 
-    -- 箭头下方说明
-    nvgFontSize(nvg, 8)
-    nvgFillColor(nvg, nvgRGBA(255, 200, 60, 120))
-    nvgText(nvg, midX + 8, midY + 12, "\xe5\x96\x82\xe5\x85\xa5")
-
-    -- func slot (左侧 - 函数/机器)
-    self:_renderSlot(nvg, block, "func", "\xe6\x94\xbe\xe5\x87\xbd\xe6\x95\xb0", {140, 100, 240})
-    -- arg slot (右侧 - 参数/材料)
-    self:_renderSlot(nvg, block, "arg", "\xe6\x94\xbe\xe5\x8f\x82\xe6\x95\xb0", {80, 200, 220})
+    -- func slot (左侧)
+    self:_renderSlot(nvg, block, "func", "f", {c[1], c[2], c[3]})
+    -- arg slot (右侧)
+    self:_renderSlot(nvg, block, "arg", "x", {c[1], c[2], c[3]})
 end
 
 function BlockCanvas:_renderSlot(nvg, block, slotKey, placeholder, hintColor)
     local slot = block.slots[slotKey]
     if not slot then return end
 
-    hintColor = hintColor or {255, 255, 255}
+    hintColor = hintColor or {100, 120, 160}
 
     if slot.child then
         self:_renderBlock(nvg, slot.child)
@@ -595,20 +761,20 @@ function BlockCanvas:_renderSlot(nvg, block, slotKey, placeholder, hintColor)
         local sw = slot.rw or BlockDefs.SLOT_MIN_W
         local sh = slot.rh or BlockDefs.SLOT_MIN_H
 
-        -- 用色彩区分不同类型的插槽
+        -- 简洁的虚线插槽
         nvgBeginPath(nvg)
         nvgRoundedRect(nvg, sx, sy, sw, sh, 4)
-        nvgFillColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 15))
+        nvgFillColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 10))
         nvgFill(nvg)
-        nvgStrokeColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 50))
+        nvgStrokeColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 35))
         nvgStrokeWidth(nvg, 1)
         nvgStroke(nvg)
 
-        -- 占位符文字
+        -- 极简占位符
         nvgFontFace(nvg, "sans")
         nvgFontSize(nvg, 10)
         nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 80))
+        nvgFillColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 50))
         nvgText(nvg, sx + sw / 2, sy + sh / 2, placeholder)
     end
 end
