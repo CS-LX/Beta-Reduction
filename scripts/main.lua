@@ -1,15 +1,16 @@
 -- ============================================================================
 -- Lambda 演算可视化编程沙盒 (Lambda Calculus Visual Programming Sandbox)
 -- ============================================================================
--- Blender 风格布局:
+-- 模式:
+--   - 主菜单: 选择沙盒/闯关模式
+--   - 沙盒模式: Blender 风格布局，自由创作
+--   - 闯关模式: 关卡选择 + 限制积木的编辑器
+--
+-- Blender 风格布局 (沙盒 + 闯关编辑):
 --   上方: 求值/归约面板
 --   左侧: 积木库/预置节点面板
 --   中间: 画布 (节点图 或 积木编辑)
 --   右侧: Inspector 属性面板
---
--- 两套独立视图:
---   - 节点视图 (主视图): 节点连线组合
---   - 积木视图 (编辑视图): 编辑某个节点内部表达式
 -- ============================================================================
 
 local UI = require("urhox-libs/UI")
@@ -19,6 +20,21 @@ local Packager = require("Lambda.Packager")
 local BlockDefs = require("Blocks.BlockDefs")
 local BlockCanvas = require("Blocks.BlockCanvas")
 local LambdaGraph = require("Graph.LambdaGraph")
+local CampaignManager = require("Campaign.CampaignManager")
+local CampaignUI = require("Campaign.CampaignUI")
+local LevelData = require("Campaign.LevelData")
+
+-- ============================================================================
+-- 应用模式状态机
+-- ============================================================================
+-- appMode_:
+--   "menu"             → 主菜单 (选择沙盒/闯关)
+--   "sandbox"          → 沙盒模式 (完整编辑器)
+--   "campaign_select"  → 关卡选择界面
+--   "campaign_level"   → 闯关中 (限制积木编辑器)
+-- ============================================================================
+
+local appMode_ = "menu"
 
 -- ============================================================================
 -- 全局状态
@@ -47,7 +63,6 @@ local inspectorContent_ = nil
 -- 顶部面板引用
 local evalExprLabel_ = nil
 local evalResultLabel_ = nil
-local evalTraceList_ = nil
 
 -- 左侧面板引用
 local leftPanelTitle_ = nil
@@ -60,6 +75,10 @@ local graphViewPanel_ = nil
 -- 面包屑/视图指示
 local breadcrumbLabel_ = nil
 
+-- 闯关模式 HUD 引用
+local campaignHUD_ = nil
+local victoryPopup_ = nil
+
 -- ============================================================================
 -- 生命周期
 -- ============================================================================
@@ -68,11 +87,10 @@ function Start()
     graphics.windowTitle = "λ Sandbox - Lambda Calculus Visual Programming"
 
     InitUI()
-    CreateUI()
+    CampaignManager.init()
+    SetupCampaignCallbacks()
+    EnterMainMenu()
     SubscribeToEvents()
-
-    -- 初始化: 节点图里放几个预置
-    AddDefaultNodes()
 
     print("=== Lambda Sandbox Started ===")
 end
@@ -102,20 +120,106 @@ function SubscribeToEvents()
 end
 
 -- ============================================================================
--- UI 构建 (Blender 风格)
+-- 闯关回调设置
 -- ============================================================================
 
-function CreateUI()
+function SetupCampaignCallbacks()
+    CampaignUI.setCallbacks({
+        onEnterSandbox = function()
+            EnterSandbox()
+        end,
+        onEnterLevel = function(levelId)
+            EnterCampaignLevel(levelId)
+        end,
+        onExitLevel = function()
+            -- 从关卡或关卡选择退回
+            if appMode_ == "campaign_level" then
+                CampaignManager.exitLevel()
+                EnterCampaignSelect()
+            elseif appMode_ == "campaign_select" then
+                EnterMainMenu()
+            end
+        end,
+        onSubmitAnswer = function()
+            SubmitCampaignAnswer()
+        end,
+        onShowHint = function()
+            CampaignUI.showHint()
+        end,
+    })
+end
+
+-- ============================================================================
+-- 模式切换
+-- ============================================================================
+
+--- 进入主菜单
+function EnterMainMenu()
+    appMode_ = "menu"
+    currentView_ = "graph"
+    editingNodeId_ = nil
+
+    local menu = CampaignUI.createMainMenu()
+    UI.SetRoot(menu)
+
+    print("[App] 进入主菜单")
+end
+
+--- 进入沙盒模式
+function EnterSandbox()
+    appMode_ = "sandbox"
+    currentView_ = "graph"
+    editingNodeId_ = nil
+
+    CreateSandboxUI()
+    AddDefaultNodes()
+
+    print("[App] 进入沙盒模式")
+end
+
+--- 进入闯关关卡选择
+function EnterCampaignSelect()
+    appMode_ = "campaign_select"
+    currentView_ = "graph"
+    editingNodeId_ = nil
+
+    local selectUI = CampaignUI.createLevelSelect()
+    UI.SetRoot(selectUI)
+
+    print("[App] 进入关卡选择")
+end
+
+--- 进入闯关关卡
+function EnterCampaignLevel(levelId)
+    local ok, err = CampaignManager.enterLevel(levelId)
+    if not ok then
+        print("[App] 无法进入关卡: " .. err)
+        return
+    end
+
+    appMode_ = "campaign_level"
+    currentView_ = "blocks"  -- 闯关模式直接使用积木编辑
+    editingNodeId_ = nil
+    victoryPopup_ = nil
+
+    CreateCampaignLevelUI(levelId)
+
+    print("[App] 进入闯关关卡: " .. levelId)
+end
+
+-- ============================================================================
+-- 沙盒模式 UI 构建 (Blender 风格)
+-- ============================================================================
+
+function CreateSandboxUI()
     -- 积木画布 (用于编辑单个节点的内部表达式)
     blockCanvas_ = BlockCanvas {
         id = "blockCanvas",
         width = "100%",
         height = "100%",
         onBlockChanged = function()
-            -- 积木变化时更新 Inspector
-            local sel = blockCanvas_ and blockCanvas_:GetSelected()
             UpdateInspector()
-            -- 同时更新求值预览
+            local sel = blockCanvas_ and blockCanvas_:GetSelected()
             if sel then
                 local ast = BlockDefs.toAST(sel)
                 if ast then
@@ -235,7 +339,329 @@ function CreateUI()
 end
 
 -- ============================================================================
--- 上方: 求值/归约面板
+-- 闯关模式 UI 构建
+-- ============================================================================
+
+function CreateCampaignLevelUI(levelId)
+    local level = LevelData.getLevelById(levelId)
+    if not level then return end
+
+    -- 创建积木画布 (闯关模式只用积木视图)
+    blockCanvas_ = BlockCanvas {
+        id = "campaignCanvas",
+        width = "100%",
+        height = "100%",
+        onBlockChanged = function()
+            -- 积木变化时更新表达式预览
+            local roots = blockCanvas_ and blockCanvas_:GetRootBlocks() or {}
+            if #roots > 0 then
+                local ast = BlockDefs.toAST(roots[1])
+                if ast then
+                    evalExpr_ = AST.toString(ast)
+                    if evalExprLabel_ then evalExprLabel_:SetText(evalExpr_) end
+                end
+            end
+        end,
+        onBlockSelected = function(block)
+            -- 在闯关模式下暂不需要 Inspector
+        end,
+        onBlockDoubleClick = function(block)
+            ShowRenameDialogFor(block)
+        end,
+    }
+
+    -- 表达式显示
+    evalExprLabel_ = UI.Label {
+        id = "campaignExpr",
+        text = "",
+        fontSize = 12,
+        fontColor = { 160, 220, 180, 220 },
+        numberOfLines = 2,
+        flex = 1,
+    }
+
+    -- 左侧积木面板 (受限)
+    leftPanelTitle_ = UI.Label {
+        id = "leftTitle",
+        text = "积木库",
+        fontSize = 13,
+        fontColor = { 180, 190, 210, 255 },
+        paddingLeft = 12,
+        paddingTop = 10,
+        paddingBottom = 6,
+    }
+    leftPanelContent_ = UI.Panel {
+        id = "leftContent",
+        width = "100%",
+        flexDirection = "column",
+        flex = 1,
+    }
+    PopulateLeftPanelForCampaign(levelId)
+
+    -- HUD 覆盖层
+    campaignHUD_ = CampaignUI.createLevelHUD(levelId)
+
+    -- 整体布局
+    uiRoot_ = UI.Panel {
+        id = "campaignRoot",
+        width = "100%",
+        height = "100%",
+        flexDirection = "column",
+        children = {
+            -- 顶部: 简化版 (只显示表达式)
+            UI.Panel {
+                width = "100%",
+                height = 48,
+                flexDirection = "row",
+                alignItems = "center",
+                paddingLeft = 12,
+                paddingRight = 12,
+                gap = 12,
+                backgroundColor = { 22, 25, 38, 245 },
+                borderBottom = 1,
+                borderColor = { 50, 60, 90, 80 },
+                children = {
+                    UI.Label {
+                        text = "λ 闯关",
+                        fontSize = 14,
+                        fontColor = { 140, 200, 255, 255 },
+                    },
+                    UI.Panel { width = 1, height = 32, backgroundColor = { 50, 60, 90, 80 } },
+                    UI.Label { text = "表达式:", fontSize = 11, fontColor = { 120, 130, 160, 180 } },
+                    evalExprLabel_,
+                }
+            },
+            -- 内容区
+            UI.Panel {
+                width = "100%",
+                flex = 1,
+                flexDirection = "row",
+                children = {
+                    -- 左侧: 受限积木库
+                    UI.Panel {
+                        width = 170,
+                        height = "100%",
+                        flexDirection = "column",
+                        backgroundColor = { 22, 25, 38, 240 },
+                        borderRight = 1,
+                        borderColor = { 50, 60, 90, 80 },
+                        children = {
+                            leftPanelTitle_,
+                            UI.ScrollView {
+                                width = "100%",
+                                flex = 1,
+                                children = { leftPanelContent_ },
+                            },
+                        }
+                    },
+                    -- 中间: 积木画布 + HUD 叠加
+                    UI.Panel {
+                        flex = 1,
+                        height = "100%",
+                        children = {
+                            blockCanvas_,
+                            campaignHUD_,
+                        }
+                    },
+                }
+            },
+        }
+    }
+
+    UI.SetRoot(uiRoot_)
+end
+
+--- 填充闯关模式左侧面板 (受限积木)
+function PopulateLeftPanelForCampaign(levelId)
+    if not leftPanelContent_ then return end
+    leftPanelContent_:ClearChildren()
+
+    local availableBlocks = CampaignManager.getAvailableBlocks(levelId)
+    local availablePrefabs = CampaignManager.getAvailablePrefabs(levelId)
+
+    -- 基础积木
+    leftPanelContent_:AddChild(UI.Label {
+        text = "基础积木",
+        fontSize = 11,
+        fontColor = { 140, 150, 180, 180 },
+        paddingLeft = 12,
+        paddingBottom = 4,
+    })
+
+    local allBasic = {
+        { label = "变量 (x)", kind = "var", color = { 80, 200, 220, 255 } },
+        { label = "抽象 (λx.M)", kind = "abs", color = { 160, 100, 220, 255 } },
+        { label = "应用 (M N)", kind = "app", color = { 80, 180, 120, 255 } },
+    }
+
+    for _, item in ipairs(allBasic) do
+        -- 检查是否可用
+        local allowed = (availableBlocks == nil) -- nil = 全部可用
+        if not allowed and availableBlocks then
+            for _, b in ipairs(availableBlocks) do
+                if b == item.kind then allowed = true; break end
+            end
+        end
+        if allowed then
+            leftPanelContent_:AddChild(UI.Button {
+                text = item.label,
+                variant = "ghost",
+                size = "sm",
+                width = "100%",
+                textAlign = "left",
+                fontColor = item.color,
+                onClick = function()
+                    AddBlockToCurrent(item.kind)
+                end,
+            })
+        end
+    end
+
+    -- 预制积木
+    if #availablePrefabs > 0 then
+        leftPanelContent_:AddChild(UI.Panel {
+            width = "90%", height = 1,
+            marginTop = 8, marginBottom = 8,
+            alignSelf = "center",
+            backgroundColor = { 60, 70, 100, 60 },
+        })
+
+        leftPanelContent_:AddChild(UI.Label {
+            text = "预制积木",
+            fontSize = 11,
+            fontColor = { 140, 150, 180, 180 },
+            paddingLeft = 12,
+            paddingBottom = 4,
+        })
+
+        for _, prefab in ipairs(availablePrefabs) do
+            leftPanelContent_:AddChild(UI.Button {
+                text = prefab.name,
+                variant = "ghost",
+                size = "sm",
+                width = "100%",
+                textAlign = "left",
+                fontColor = { 200, 140, 255, 255 },
+                onClick = function()
+                    AddPrefabBlock(prefab.id)
+                end,
+            })
+        end
+    end
+
+    -- 操作区
+    leftPanelContent_:AddChild(UI.Panel {
+        width = "90%", height = 1,
+        marginTop = 8, marginBottom = 8,
+        alignSelf = "center",
+        backgroundColor = { 60, 70, 100, 60 },
+    })
+
+    leftPanelContent_:AddChild(UI.Label {
+        text = "操作",
+        fontSize = 11,
+        fontColor = { 140, 150, 180, 180 },
+        paddingLeft = 12,
+        paddingBottom = 4,
+    })
+
+    leftPanelContent_:AddChild(UI.Button {
+        text = "清空画布",
+        variant = "danger",
+        size = "sm",
+        width = "100%",
+        onClick = function()
+            if blockCanvas_ then blockCanvas_:Clear() end
+        end,
+    })
+
+    leftPanelContent_:AddChild(UI.Button {
+        text = "删除选中",
+        variant = "ghost",
+        size = "sm",
+        width = "100%",
+        onClick = function() DeleteSelected() end,
+    })
+end
+
+--- 添加预制积木到画布
+function AddPrefabBlock(prefabId)
+    if not blockCanvas_ then return end
+    local ast = CampaignManager.getPrefabAST(prefabId)
+    if ast then
+        local block = ASTToBlock(ast)
+        if block then
+            local rx = 100 + math.random(0, 200)
+            local ry = 80 + math.random(0, 150)
+            blockCanvas_:AddBlock(block, rx, ry)
+        end
+    end
+end
+
+-- ============================================================================
+-- 闯关提交答案
+-- ============================================================================
+
+function SubmitCampaignAnswer()
+    if appMode_ ~= "campaign_level" then return end
+    if not blockCanvas_ then return end
+
+    -- 从画布获取根积木 → 转 AST
+    local roots = blockCanvas_:GetRootBlocks()
+    if #roots == 0 then
+        CampaignUI.showFeedback(false, "画布为空！请构建一个 Lambda 表达式。")
+        return
+    end
+
+    -- 取第一个根积木作为答案
+    local playerAST = BlockDefs.toAST(roots[1])
+    if not playerAST then
+        CampaignUI.showFeedback(false, "无法解析积木为表达式，请检查是否有未连接的槽位。")
+        return
+    end
+
+    print("[Campaign] 提交答案: " .. AST.toString(playerAST))
+
+    -- 验证
+    local pass, msg = CampaignManager.submitAnswer(playerAST)
+
+    if pass then
+        CampaignUI.showFeedback(true, msg)
+        -- 延迟显示胜利弹窗
+        local level = CampaignManager.getCurrentLevel()
+            or LevelData.getLevelById(CampaignManager.getCurrentLevelId() or "")
+        if level then
+            ShowVictoryPopup(level)
+        end
+    else
+        CampaignUI.showFeedback(false, msg)
+    end
+end
+
+function ShowVictoryPopup(level)
+    -- 找到当前 level 的下一关
+    local idx = LevelData.getLevelIndex(level.id)
+    local nextLevel = LevelData.levels[idx + 1]
+    local isFinalBoss = (level.isBoss and not nextLevel)
+
+    victoryPopup_ = CampaignUI.createVictoryPopup(level, function()
+        -- "下一关" / "回到主菜单" 回调
+        if isFinalBoss or not nextLevel then
+            EnterMainMenu()
+        else
+            CampaignManager.exitLevel()
+            EnterCampaignLevel(nextLevel.id)
+        end
+    end)
+
+    -- 把弹窗叠加到当前 UI 之上 (利用 absolute 定位)
+    if uiRoot_ then
+        uiRoot_:AddChild(victoryPopup_)
+    end
+end
+
+-- ============================================================================
+-- 上方: 求值/归约面板 (沙盒模式)
 -- ============================================================================
 
 function CreateTopPanel()
@@ -302,12 +728,20 @@ function CreateTopPanel()
                     evalResultLabel_,
                 }
             },
+            -- 返回主菜单
+            UI.Panel { width = 1, height = 44, backgroundColor = { 50, 60, 90, 80 } },
+            UI.Button {
+                text = "菜单",
+                variant = "ghost",
+                size = "sm",
+                onClick = function() EnterMainMenu() end,
+            },
         }
     }
 end
 
 -- ============================================================================
--- 左侧面板: 积木库 / 预置节点
+-- 左侧面板: 积木库 / 预置节点 (沙盒模式)
 -- ============================================================================
 
 function CreateLeftPanel()
@@ -611,12 +1045,10 @@ function UpdateInspectorForGraph()
         local node = lambdaGraph_.nodes_[selId]
         if not node then return end
 
-        -- 节点名称
         AddInspectorRow("名称", node.name)
         AddInspectorRow("ID", node.id)
         AddInspectorRow("预置", node.isPreset and "是" or "否")
 
-        -- 表达式
         if node.nodeDef and node.nodeDef.displayExpr then
             AddInspectorSection("表达式")
             inspectorContent_:AddChild(UI.Label {
@@ -628,7 +1060,6 @@ function UpdateInspectorForGraph()
             })
         end
 
-        -- 输入端口
         if #node.inputs > 0 then
             AddInspectorSection("输入端口 (" .. #node.inputs .. ")")
             for i, inp in ipairs(node.inputs) do
@@ -638,7 +1069,6 @@ function UpdateInspectorForGraph()
             end
         end
 
-        -- 输出端口
         if #node.outputs > 0 then
             AddInspectorSection("输出端口 (" .. #node.outputs .. ")")
             for i, outp in ipairs(node.outputs) do
@@ -647,7 +1077,6 @@ function UpdateInspectorForGraph()
             end
         end
 
-        -- 操作按钮
         AddInspectorSection("操作")
         inspectorContent_:AddChild(UI.Button {
             text = "编辑表达式",
@@ -678,18 +1107,19 @@ function UpdateInspectorForGraph()
             marginTop = 4,
             onClick = function()
                 if lambdaGraph_ then
-                    lambdaGraph_:RemoveNode(selId)
+                    lambdaGraph_:RemoveNode(lambdaGraph_.selectedId_)
                     UpdateInspector()
                 end
             end,
         })
     else
-        -- 未选中: 显示全局信息
         AddInspectorSection("节点图概览")
         local nodeCount = 0
-        for _ in pairs(lambdaGraph_.nodes_) do nodeCount = nodeCount + 1 end
+        if lambdaGraph_ then
+            for _ in pairs(lambdaGraph_.nodes_) do nodeCount = nodeCount + 1 end
+        end
         AddInspectorRow("节点数", tostring(nodeCount))
-        AddInspectorRow("连线数", tostring(#lambdaGraph_.edges_))
+        AddInspectorRow("连线数", tostring(lambdaGraph_ and #lambdaGraph_.edges_ or 0))
 
         AddInspectorSection("操作提示")
         inspectorContent_:AddChild(UI.Label {
@@ -705,7 +1135,6 @@ end
 function UpdateInspectorForBlocks()
     local sel = blockCanvas_ and blockCanvas_:GetSelected()
     if sel then
-        -- 选中积木: 显示积木属性
         AddInspectorRow("类型", sel.kind)
         AddInspectorRow("ID", sel.id)
 
@@ -738,7 +1167,6 @@ function UpdateInspectorForBlocks()
             AddInspectorRow("arg", hasArg and "已填充" or "空")
         end
 
-        -- 通用: 当前 AST 预览
         local ast = BlockDefs.toAST(sel)
         if ast then
             AddInspectorSection("预览")
@@ -751,7 +1179,6 @@ function UpdateInspectorForBlocks()
             })
         end
 
-        -- 通用删除
         AddInspectorSection("")
         inspectorContent_:AddChild(UI.Button {
             text = "删除积木",
@@ -766,10 +1193,8 @@ function UpdateInspectorForBlocks()
             end,
         })
     else
-        -- 未选中: 显示当前编辑节点的信息
         AddInspectorSection("编辑中: " .. editingNodeName_)
 
-        -- 显示当前画布上的积木树的整体表达式
         local roots = blockCanvas_ and blockCanvas_:GetRootBlocks() or {}
         AddInspectorRow("根积木数", tostring(#roots))
 
@@ -799,7 +1224,6 @@ function UpdateInspectorForBlocks()
             paddingLeft = 4,
         })
 
-        -- 返回按钮
         AddInspectorSection("")
         inspectorContent_:AddChild(UI.Button {
             text = "保存并返回节点图",
@@ -847,10 +1271,12 @@ function AddInspectorSection(title)
 end
 
 -- ============================================================================
--- 视图切换: 进入积木编辑器
+-- 视图切换: 进入积木编辑器 (沙盒模式)
 -- ============================================================================
 
 function EnterBlockEditor(nodeId)
+    if appMode_ ~= "sandbox" then return end
+
     local node = lambdaGraph_.nodes_[nodeId]
     if not node then return end
 
@@ -884,15 +1310,16 @@ function EnterBlockEditor(nodeId)
 end
 
 -- ============================================================================
--- 视图切换: 退出积木编辑器 → 回到节点图
+-- 视图切换: 退出积木编辑器 → 回到节点图 (沙盒模式)
 -- ============================================================================
 
 function ExitBlockEditor()
+    if appMode_ ~= "sandbox" then return end
     if currentView_ ~= "blocks" or not editingNodeId_ then
         return
     end
 
-    -- 从积木画布收集 AST (取第一个根积木)
+    -- 从积木画布收集 AST
     local roots = blockCanvas_:GetRootBlocks()
     local newAST = nil
     if #roots > 0 then
@@ -919,7 +1346,6 @@ function ExitBlockEditor()
                 connections = {},
             }
         end
-        -- 注意: 连线会因端口变化而失效，这里简单清除与该节点相关的连线
         local newEdges = {}
         for _, e in ipairs(lambdaGraph_.edges_) do
             if e.fromNodeId ~= editingNodeId_ and e.toNodeId ~= editingNodeId_ then
@@ -1006,9 +1432,20 @@ end
 -- ============================================================================
 
 function DeleteSelected()
+    if appMode_ == "campaign_level" then
+        -- 闯关模式: 只有积木
+        if blockCanvas_ then
+            local sel = blockCanvas_:GetSelected()
+            if sel then
+                blockCanvas_:RemoveBlock(sel)
+            end
+        end
+        return
+    end
+
+    -- 沙盒模式
     if currentView_ == "graph" then
         if lambdaGraph_ then
-            -- 优先删除选中的连线
             if lambdaGraph_.selectedEdgeIdx_ then
                 lambdaGraph_:RemoveSelectedEdge()
                 UpdateInspector()
@@ -1106,10 +1543,12 @@ function ShowRenameDialogFor(block)
 end
 
 -- ============================================================================
--- 求值逻辑
+-- 求值逻辑 (沙盒模式)
 -- ============================================================================
 
 function EvaluateCurrent()
+    if appMode_ ~= "sandbox" then return end
+
     if currentView_ == "graph" then
         if lambdaGraph_ and lambdaGraph_.selectedId_ then
             local result = lambdaGraph_:EvaluateNode(lambdaGraph_.selectedId_)
@@ -1117,7 +1556,6 @@ function EvaluateCurrent()
                 evalResult_ = AST.toString(result)
                 if evalResultLabel_ then evalResultLabel_:SetText(evalResult_) end
             end
-            -- 更新表达式显示
             local node = lambdaGraph_.nodes_[lambdaGraph_.selectedId_]
             if node and node.nodeDef then
                 evalExpr_ = node.nodeDef.displayExpr or "?"
@@ -1125,10 +1563,8 @@ function EvaluateCurrent()
             end
         end
     else
-        -- 积木视图: 对选中积木树求值
         local ast = blockCanvas_ and blockCanvas_:GetSelectedAST()
         if not ast then
-            -- 无选中 → 取第一个根积木
             local roots = blockCanvas_:GetRootBlocks()
             if #roots > 0 then
                 ast = BlockDefs.toAST(roots[1])
@@ -1155,13 +1591,14 @@ function RunEvaluation(ast)
 end
 
 function StepEval()
+    if appMode_ ~= "sandbox" then return end
+
     if #evalTrace_ == 0 then
         EvaluateCurrent()
         traceIndex_ = 1
     else
         traceIndex_ = math.min(traceIndex_ + 1, #evalTrace_)
     end
-    -- 更新显示
     if traceIndex_ > 0 and traceIndex_ <= #evalTrace_ then
         local stepAST = evalTrace_[traceIndex_]
         if evalExprLabel_ then
@@ -1171,7 +1608,7 @@ function StepEval()
 end
 
 -- ============================================================================
--- 默认节点
+-- 默认节点 (沙盒模式)
 -- ============================================================================
 
 function AddDefaultNodes()
@@ -1200,14 +1637,28 @@ function HandleKeyDown(eventType, eventData)
     local key = eventData["Key"]:GetInt()
 
     if key == KEY_ESCAPE then
-        if currentView_ == "blocks" then
-            ExitBlockEditor()
+        if appMode_ == "sandbox" then
+            if currentView_ == "blocks" then
+                ExitBlockEditor()
+            end
+        elseif appMode_ == "campaign_level" then
+            -- ESC 退出当前关卡
+            CampaignManager.exitLevel()
+            EnterCampaignSelect()
+        elseif appMode_ == "campaign_select" then
+            EnterMainMenu()
         end
     elseif key == KEY_DELETE or key == KEY_BACKSPACE then
         DeleteSelected()
     elseif key == KEY_F2 then
         ShowRenameDialog()
     elseif key == KEY_SPACE then
-        EvaluateCurrent()
+        if appMode_ == "sandbox" then
+            EvaluateCurrent()
+        end
+    elseif key == KEY_RETURN then
+        if appMode_ == "campaign_level" then
+            SubmitCampaignAnswer()
+        end
     end
 end
