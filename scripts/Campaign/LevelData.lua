@@ -106,6 +106,7 @@ LevelData.levels = {
         },
         -- 特殊验证：结果化简为 a
         verifyExact = "a",
+        initialVars = { "a" },  -- 预置变量，免去玩家手动命名
         reward = nil,  -- 本关不解锁新积木，纯练习
     },
 
@@ -229,6 +230,7 @@ LevelData.levels = {
             { input = "", expect = "apple", raw = true },
         },
         verifyExact = "apple",
+        initialVars = { "apple", "banana" },  -- 预置变量
         reward = nil,  -- 纯练习关
     },
 
@@ -343,6 +345,7 @@ LevelData.levels = {
             { input = "", expect = "apple", raw = true },
         },
         verifyExact = "apple",
+        initialVars = { "apple", "banana" },  -- 预置变量
         reward = nil,  -- 纯练习关，巩固 "布尔值=选择器" 的理解
     },
 
@@ -934,6 +937,7 @@ LevelData.levels = {
         testCases = {
             { input = "hello world", expect = "λf.f hello world", raw = true },
         },
+        initialVars = { "hello", "world" },  -- 预置变量
         reward = {
             id = "PAIR",
             name = "PAIR",

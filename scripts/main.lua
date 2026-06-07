@@ -217,6 +217,17 @@ function EnterCampaignLevel(levelId)
 
     CreateCampaignLevelUI(levelId)
 
+    -- 预置变量：为 raw=true 关卡自动在画布中放置命名变量
+    local level = LevelData.getLevelById(levelId)
+    if level and level.initialVars and blockCanvas_ then
+        for i, varName in ipairs(level.initialVars) do
+            local block = BlockDefs.createVar(varName)
+            local x = 120 + (i - 1) * 120
+            local y = 100
+            blockCanvas_:AddBlock(block, x, y)
+        end
+    end
+
     print("[App] 进入闯关关卡: " .. levelId)
 end
 
@@ -1049,57 +1060,50 @@ local function collectVarBlocks(block, varName, list)
     return list
 end
 
---- 找到积木树中最外层的 application（如果根是 app 就是它）
----@param block table 根积木
----@return table|nil appBlock, table|nil funcSlot, table|nil argSlot
-local function findOutermostApp(block)
+--- 在积木树中按 Normal Order 找到第一个 redex（App 且 func 是 lambda）
+--- 返回: appBlock, lambdaBlock, argBlock  或 nil
+---@param block table
+---@return table|nil, table|nil, table|nil
+local function findRedexInBlocks(block)
+    if not block then return nil, nil, nil end
     if block.kind == "application" then
-        return block, block.slots.func, block.slots.arg
+        -- 如果 func 是 lambda → 这就是 redex
+        local fc = block.slots.func and block.slots.func.child
+        if fc and fc.kind == "abstraction" then
+            local argChild = block.slots.arg and block.slots.arg.child
+            return block, fc, argChild
+        end
+        -- 否则递归进 func 侧寻找（Normal Order: 先 func）
+        if fc then
+            local a, l, r = findRedexInBlocks(fc)
+            if a then return a, l, r end
+        end
+        -- 再递归 arg 侧
+        local ac = block.slots.arg and block.slots.arg.child
+        if ac then
+            local a, l, r = findRedexInBlocks(ac)
+            if a then return a, l, r end
+        end
+    elseif block.kind == "abstraction" then
+        -- 递归 body
+        local bc = block.slots.body and block.slots.body.child
+        if bc then
+            return findRedexInBlocks(bc)
+        end
     end
     return nil, nil, nil
 end
 
---- 找到积木树中最外层的 lambda（可能在 app 的 func 槽里）
----@param block table
----@return table|nil lambdaBlock
-local function findLambdaInFunc(block)
-    if block.kind == "application" and block.slots.func.child then
-        local fc = block.slots.func.child
-        if fc.kind == "abstraction" then
-            return fc
-        end
-    end
-    -- 根本身是 lambda
-    if block.kind == "abstraction" then
-        return block
-    end
-    return nil
+--- 获取积木的画布中心坐标
+local function getBlockCenter(block)
+    return block.x + block.w / 2, block.y + block.h / 2
 end
 
---- 获取槽位的精确画布中心坐标（优先用子积木实际位置）
----@param parentBlock table 父积木
----@param slotKey string 槽位名
----@return number x, number y
-local function getSlotCenter(parentBlock, slotKey)
-    local slot = parentBlock.slots and parentBlock.slots[slotKey]
-    if not slot then
-        return parentBlock.x + parentBlock.w / 2, parentBlock.y + parentBlock.h / 2
-    end
-    if slot.child then
-        -- 子积木已经有绝对坐标（layout 已设置）
-        return slot.child.x + slot.child.w / 2, slot.child.y + slot.child.h / 2
-    end
-    -- 空槽位：用相对坐标计算
-    return parentBlock.x + (slot.rx or 0) + (slot.rw or 40) / 2,
-           parentBlock.y + (slot.ry or 0) + (slot.rh or 30) / 2
-end
-
---- 白箱归约动画：展示槽位级 IO + 内部数据流 + 变量替换过程
---- 动画流程（β-归约 (λx.body) arg）：
----   1. 输入胶囊精确飞入 arg 槽中心 → 槽位高亮
----   2. Lambda header 高亮 + "x → value" 标签
----   3. 值从 lambda header 沿路径流向 body 内每个匹配变量 → 变量被替换
----   4. 结果从 body 槽精确飞出
+--- 白箱归约动画 v3：每个积木只负责自己的动画，不引入玩家未学的概念
+--- 两种模式：
+---   A) "输入喂食"模式（有外部输入）：输入值飞入 lambda → 内部替换 → 结果飞出
+---      不创建 Application 积木，保持玩家认知范围内的概念
+---   B) "画布归约"模式（raw=true）：玩家已构建完整表达式，在已有积木上做归约动画
 function PlayCanvasFlowAnimation(rootBlock, playerAST, testCases, pass, msg, level)
     if not blockCanvas_ then return end
 
@@ -1108,189 +1112,391 @@ function PlayCanvasFlowAnimation(rootBlock, playerAST, testCases, pass, msg, lev
     blockCanvas_:SetFrozen(true)
     blockCanvas_:ClearAnims()
 
-    local bx, by, bw, bh = rootBlock.x, rootBlock.y, rootBlock.w, rootBlock.h
-
     -- 时序常量
-    local FLY_DUR = 0.45       -- 外部胶囊飘动时间
-    local SLOT_HL_DUR = 0.4    -- 槽位高亮持续
-    local INTERNAL_DUR = 0.35  -- 内部流动到每个变量的时间
-    local REPLACE_DUR = 0.5    -- 变量替换显示时间
-    local SUBST_DUR = 0.6      -- 替换标签持续
-    local GAP = 0.1            -- 步骤间间隔
+    local FLY_IN_DUR = 0.4     -- 输入飞入时间
+    local FLY_OUT_DUR = 0.4    -- 结果飞出时间
+    local SLOT_HL_DUR = 0.3    -- 槽位高亮持续
+    local INTERNAL_DUR = 0.25  -- 内部流动到每个变量的时间
+    local REPLACE_DUR = 0.35   -- 变量替换显示时间
+    local SUBST_DUR = 0.5      -- 替换标签持续
+    local STEP_GAP = 0.3       -- 归约步骤间间隔
     local TEST_GAP = 0.5       -- 测试用例间间隔
 
-    local totalDelay = 0.15
+    -- 保存原始积木位置（用于动画结束后恢复）
+    local origX, origY = rootBlock.x, rootBlock.y
 
-    for _, tc in ipairs(testCases) do
-        local inputTokens = Verifier._splitInputs(tc.input)
+    ---------------------------------------------------------------------------
+    -- 模式 A 辅助：在 lambda 积木上展示"喂入一个值"的动画
+    -- 不创建 Application 积木，只在当前 lambda 上做内部动画
+    -- 返回动画消耗的总时间
+    ---------------------------------------------------------------------------
+    local function animateFeedInput(lambdaBlock, inputStr, delay)
+        local dur = 0.0
 
-        -- 当前表达式 = playerAST + 输入
-        local expr = AST.deepClone(playerAST)
+        -- 1) 输入值从右侧飞入 lambda 积木
+        local targetX = lambdaBlock.x + lambdaBlock.w / 2
+        local targetY = lambdaBlock.y + (BlockDefs.HEADER_H or 26) / 2
+        local startX = lambdaBlock.x + lambdaBlock.w + 60
+        local startY = targetY
+        blockCanvas_:AddFlowAnim(
+            inputStr, startX, startY,
+            targetX, targetY,
+            FLY_IN_DUR, { 100, 220, 255 }, delay + dur
+        )
+        dur = dur + FLY_IN_DUR * 0.7
 
-        -- 对每个输入依次执行一轮 β-归约可视化
-        if #inputTokens > 0 then
-            for idx, inputStr in ipairs(inputTokens) do
-                -- 构造表达式
-                local inputAST = Verifier.Parser.parse(inputStr)
-                if inputAST then
-                    expr = AST.App(expr, inputAST)
-                end
+        -- 2) Lambda header 高亮 + "param → value" 替换标签
+        blockCanvas_:AddFlashBlock(lambdaBlock, 0.4, { 200, 140, 255 }, delay + dur)
+        local labelText = lambdaBlock.param .. " → " .. inputStr
+        local labelX = lambdaBlock.x + lambdaBlock.w / 2
+        local labelY = lambdaBlock.y - 4
+        blockCanvas_:AddSubstitutionLabel(
+            labelX, labelY, labelText,
+            SUBST_DUR, { 255, 200, 80 }, delay + dur
+        )
+        dur = dur + 0.35
 
-                -- === 阶段 1: 输入飞入 arg 槽 ===
-                local appBlock = findOutermostApp(rootBlock)
-                local argCX, argCY
-                if appBlock then
-                    argCX, argCY = getSlotCenter(appBlock, "arg")
-                else
-                    argCX = bx + bw * 0.75
-                    argCY = by + bh * 0.5
-                end
-
-                -- 起始位置：积木右上方
-                local inStartX = bx + bw + 40 + (idx - 1) * 20
-                local inStartY = by - 20
-
-                blockCanvas_:AddFlowAnim(
-                    inputStr, inStartX, inStartY,
-                    argCX, argCY,
-                    FLY_DUR, { 100, 200, 255 }, totalDelay
+        -- 3) 值从 header 流向 body 内所有匹配变量
+        local flowStartX = lambdaBlock.x + lambdaBlock.w / 2
+        local flowStartY = lambdaBlock.y + (BlockDefs.HEADER_H or 26)
+        local bodyBlock = lambdaBlock.slots.body and lambdaBlock.slots.body.child
+        if bodyBlock then
+            local varBlocks = collectVarBlocks(bodyBlock, lambdaBlock.param, {})
+            for vi, vb in ipairs(varBlocks) do
+                local varCX = vb.x + vb.w / 2
+                local varCY = vb.y + vb.h / 2
+                local viDelay = delay + dur + (vi - 1) * (INTERNAL_DUR + 0.05)
+                blockCanvas_:AddInternalFlow(
+                    inputStr,
+                    flowStartX, flowStartY,
+                    varCX, varCY,
+                    INTERNAL_DUR,
+                    { 255, 180, 80 },
+                    viDelay
                 )
-                totalDelay = totalDelay + FLY_DUR
-
-                -- arg 槽高亮
-                if appBlock then
-                    blockCanvas_:AddSlotHighlight(
-                        appBlock, "arg", SLOT_HL_DUR,
-                        { 100, 200, 255 }, totalDelay
-                    )
-                end
-                totalDelay = totalDelay + SLOT_HL_DUR * 0.5
-
-                -- === 阶段 2: 内部替换可视化 ===
-                local lambda = findLambdaInFunc(rootBlock)
-                if lambda then
-                    -- Lambda header 高亮（参数绑定）
-                    blockCanvas_:AddFlashBlock(
-                        lambda, 0.4, { 200, 140, 255 }, totalDelay
-                    )
-
-                    -- "x → value" 标签在 header 上方
-                    local labelText = lambda.param .. " \xe2\x86\x92 " .. inputStr
-                    local labelX = lambda.x + lambda.w / 2
-                    local labelY = lambda.y - 2
-                    blockCanvas_:AddSubstitutionLabel(
-                        labelX, labelY, labelText,
-                        SUBST_DUR, { 255, 200, 80 }, totalDelay
-                    )
-                    totalDelay = totalDelay + 0.3
-
-                    -- === 阶段 3: 数据从 header 流向 body 内每个变量 ===
-                    -- 流动起点 = lambda header 中心
-                    local flowStartX = lambda.x + lambda.w / 2
-                    local flowStartY = lambda.y + BlockDefs.HEADER_H
-
-                    local bodyBlock = lambda.slots.body.child
-                    if bodyBlock then
-                        local varBlocks = collectVarBlocks(bodyBlock, lambda.param, {})
-                        for vi, vb in ipairs(varBlocks) do
-                            -- 内部流动：从 header 底部流向变量积木中心
-                            local varCX = vb.x + vb.w / 2
-                            local varCY = vb.y + vb.h / 2
-                            blockCanvas_:AddInternalFlow(
-                                inputStr,
-                                flowStartX, flowStartY,
-                                varCX, varCY,
-                                INTERNAL_DUR,
-                                { 255, 180, 80 },
-                                totalDelay + (vi - 1) * (INTERNAL_DUR + 0.05)
-                            )
-                            -- 流动到达后：变量积木显示替换效果
-                            local replaceDelay = totalDelay + (vi - 1) * (INTERNAL_DUR + 0.05) + INTERNAL_DUR
-                            blockCanvas_:AddVarReplace(
-                                vb, inputStr, REPLACE_DUR,
-                                { 255, 180, 80 }, replaceDelay
-                            )
-                        end
-                        if #varBlocks > 0 then
-                            totalDelay = totalDelay + (#varBlocks) * (INTERNAL_DUR + 0.05) + REPLACE_DUR * 0.5
-                        end
-                    end
-                    totalDelay = totalDelay + GAP
-                else
-                    -- 非 lambda：整块闪烁
-                    blockCanvas_:AddFlashBlock(
-                        rootBlock, 0.5, { 200, 160, 255 }, totalDelay
-                    )
-                    totalDelay = totalDelay + 0.5 + GAP
-                end
-
-                -- 执行归约得到中间结果
-                expr = Evaluator.reduceToNF(expr, 200) or expr
+                blockCanvas_:AddVarReplace(
+                    vb, inputStr, REPLACE_DUR,
+                    { 255, 180, 80 }, viDelay + INTERNAL_DUR
+                )
+            end
+            if #varBlocks > 0 then
+                dur = dur + (#varBlocks) * (INTERNAL_DUR + 0.05) + REPLACE_DUR * 0.6
+            else
+                -- 无匹配变量（参数被丢弃），短暂闪烁 body 表示跳过
+                blockCanvas_:AddFlashBlock(bodyBlock, 0.25, { 180, 220, 160 }, delay + dur)
+                dur = dur + 0.25
             end
         else
-            -- 无输入：直接运行
-            blockCanvas_:AddFlowAnim(
-                "\xe2\x96\xb6 run",
-                bx + bw + 40, by,
-                bx + bw / 2, by + bh / 2,
-                FLY_DUR, { 180, 180, 100 }, totalDelay
-            )
-            totalDelay = totalDelay + FLY_DUR
-
-            blockCanvas_:AddFlashBlock(
-                rootBlock, 0.5, { 200, 160, 255 }, totalDelay
-            )
-            totalDelay = totalDelay + 0.5 + GAP
-
-            expr = Evaluator.reduceToNF(expr, 200) or expr
+            dur = dur + 0.2
         end
 
-        -- === 阶段 4: 结果从 body 精确飞出 ===
-        local resultStr = expr and AST.toString(expr) or "?"
+        return dur
+    end
 
-        local outStartX, outStartY
-        local lambdaOut = findLambdaInFunc(rootBlock)
-        if lambdaOut and lambdaOut.slots.body then
-            outStartX, outStartY = getSlotCenter(lambdaOut, "body")
-            -- body 槽高亮（结果产出）
-            blockCanvas_:AddSlotHighlight(
-                lambdaOut, "body", SLOT_HL_DUR,
-                { 100, 255, 160 }, totalDelay
-            )
+    ---------------------------------------------------------------------------
+    -- 模式 B 辅助：在画布积木上做一步 β-归约动画（适用于 raw=true）
+    -- 此时玩家已知应用积木，可以展示完整的 redex 动画
+    ---------------------------------------------------------------------------
+    local function animateOneReduction(delay)
+        local roots = blockCanvas_:GetRootBlocks()
+        local curBlock = roots[1]
+        if not curBlock then return 0.3 end
+
+        local appBlock, lambdaBlock, argBlock = findRedexInBlocks(curBlock)
+        if not appBlock or not lambdaBlock then
+            -- 无 redex：闪烁表示已是正常形式
+            blockCanvas_:AddFlashBlock(curBlock, 0.3, { 100, 200, 180 }, delay)
+            return 0.3
+        end
+
+        local dur = 0.0
+
+        -- 1) 高亮 redex application 积木
+        blockCanvas_:AddFlashBlock(appBlock, 0.35, { 80, 160, 255 }, delay + dur)
+        dur = dur + 0.25
+
+        -- 2) 高亮 arg 积木并获取文本
+        local argStr = "?"
+        if argBlock then
+            local argAST = BlockDefs.toAST(argBlock)
+            argStr = argAST and AST.toString(argAST) or argBlock.name or "?"
+            blockCanvas_:AddSlotHighlight(appBlock, "arg", SLOT_HL_DUR, { 100, 200, 255 }, delay + dur)
+            blockCanvas_:AddFlashBlock(argBlock, SLOT_HL_DUR, { 100, 220, 180 }, delay + dur)
+            dur = dur + SLOT_HL_DUR * 0.6
+        end
+
+        -- 3) Lambda header + 替换标签
+        blockCanvas_:AddFlashBlock(lambdaBlock, 0.4, { 200, 140, 255 }, delay + dur)
+        local labelText = lambdaBlock.param .. " → " .. argStr
+        local labelX = lambdaBlock.x + lambdaBlock.w / 2
+        local labelY = lambdaBlock.y - 4
+        blockCanvas_:AddSubstitutionLabel(
+            labelX, labelY, labelText,
+            SUBST_DUR, { 255, 200, 80 }, delay + dur
+        )
+        dur = dur + 0.35
+
+        -- 4) 值流向 body 内变量
+        local flowStartX = lambdaBlock.x + lambdaBlock.w / 2
+        local flowStartY = lambdaBlock.y + (BlockDefs.HEADER_H or 26)
+        local bodyBlock = lambdaBlock.slots.body and lambdaBlock.slots.body.child
+        if bodyBlock then
+            local varBlocks = collectVarBlocks(bodyBlock, lambdaBlock.param, {})
+            for vi, vb in ipairs(varBlocks) do
+                local varCX = vb.x + vb.w / 2
+                local varCY = vb.y + vb.h / 2
+                local viDelay = delay + dur + (vi - 1) * (INTERNAL_DUR + 0.05)
+                blockCanvas_:AddInternalFlow(
+                    argStr,
+                    flowStartX, flowStartY,
+                    varCX, varCY,
+                    INTERNAL_DUR,
+                    { 255, 180, 80 },
+                    viDelay
+                )
+                blockCanvas_:AddVarReplace(
+                    vb, argStr, REPLACE_DUR,
+                    { 255, 180, 80 }, viDelay + INTERNAL_DUR
+                )
+            end
+            if #varBlocks > 0 then
+                dur = dur + (#varBlocks) * (INTERNAL_DUR + 0.05) + REPLACE_DUR * 0.6
+            else
+                blockCanvas_:AddFlashBlock(bodyBlock, 0.25, { 180, 220, 160 }, delay + dur)
+                dur = dur + 0.25
+            end
         else
-            outStartX = bx + bw / 2
-            outStartY = by + bh / 2
+            dur = dur + 0.2
         end
-        totalDelay = totalDelay + SLOT_HL_DUR * 0.5
 
-        -- 结果飞向右下
-        local outEndX = bx + bw + 80
-        local outEndY = by + bh + 30
+        return dur
+    end
 
-        -- 判断正确性
+    ---------------------------------------------------------------------------
+    -- 链式测试用例执行
+    ---------------------------------------------------------------------------
+    local function runTestCase(tcIdx, onAllDone)
+        if tcIdx > #testCases then
+            if onAllDone then onAllDone() end
+            return
+        end
+
+        local tc = testCases[tcIdx]
+        local inputTokens = Verifier._splitInputs(tc.input)
+        local isRaw = tc.raw
+
+        -- 计算最终结果（用于比对和结果飞出显示）
+        local fullExpr = AST.deepClone(playerAST)
+        if #inputTokens > 0 then
+            for _, inputStr in ipairs(inputTokens) do
+                local inputAST = Verifier.Parser.parse(inputStr)
+                if inputAST then
+                    fullExpr = AST.App(fullExpr, inputAST)
+                end
+            end
+        end
+        local resultAST = Evaluator.reduceToNF(fullExpr, 200)
+        local resultStr = resultAST and AST.toString(resultAST) or "?"
         local expectAST = Verifier.Parser.parse(tc.expect)
         local match = false
-        if expr and expectAST then
-            match = Verifier.alphaEquiv(expr, expectAST)
+        if resultAST and expectAST then
+            match = Verifier.alphaEquiv(resultAST, expectAST)
             if not match then
                 local expectReduced = Evaluator.reduceToNF(expectAST, 200)
                 if expectReduced then
-                    match = Verifier.alphaEquiv(expr, expectReduced)
+                    match = Verifier.alphaEquiv(resultAST, expectReduced)
                 end
             end
         end
 
-        local outColor = match and { 100, 255, 160 } or { 255, 100, 100 }
-        blockCanvas_:AddFlowAnim(
-            resultStr, outStartX, outStartY,
-            outEndX, outEndY,
-            FLY_DUR, outColor, totalDelay
-        )
-        totalDelay = totalDelay + FLY_DUR + TEST_GAP
+        -- =====================================================================
+        -- 模式 A：有外部输入 → "喂食"动画（不引入 Application 积木）
+        -- =====================================================================
+        if #inputTokens > 0 and not isRaw then
+            -- 恢复画布为玩家原始积木
+            blockCanvas_:ReplaceBlocks({})
+            blockCanvas_:AddBlock(rootBlock, origX, origY)
+
+            -- 当前 AST 状态（逐步替换）
+            local currentAST = AST.deepClone(playerAST)
+
+            -- 结果飞出 + 进入下一个测试用例（前置声明供 feedInput 引用）
+            local function flyOutResult()
+                local roots = blockCanvas_:GetRootBlocks()
+                local outBlock = roots[1]
+                local outX = outBlock and (outBlock.x + outBlock.w / 2) or (origX + 50)
+                local outY = outBlock and (outBlock.y + outBlock.h / 2) or (origY + 20)
+                local outColor = match and { 100, 255, 160 } or { 255, 100, 100 }
+                blockCanvas_:AddFlowAnim(
+                    resultStr, outX, outY,
+                    outX + 80, outY - 20,
+                    FLY_OUT_DUR, outColor, 0.1
+                )
+                blockCanvas_:AddTimedAction(FLY_OUT_DUR + TEST_GAP, function()
+                    runTestCase(tcIdx + 1, onAllDone)
+                end)
+            end
+
+            -- 链式喂入每个输入
+            local function feedInput(inputIdx)
+                if inputIdx > #inputTokens then
+                    -- 所有输入喂完 → 检查是否还有内部 redex 需要归约
+                    local trace = Evaluator.trace(currentAST, 20)
+                    local numInternalSteps = #trace - 1
+
+                    if numInternalSteps > 0 then
+                        -- 还有内部归约步骤（画布上的积木可能有嵌套 redex）
+                        local function runInternalStep(sIdx)
+                            if sIdx > numInternalSteps then
+                                -- 内部归约完成 → 结果飞出
+                                flyOutResult()
+                                return
+                            end
+                            local stepDur = animateOneReduction(0.05)
+                            blockCanvas_:AddTimedAction(stepDur + STEP_GAP, function()
+                                local nextAST = trace[sIdx + 1]
+                                local nextBlock = ASTToBlock(nextAST)
+                                if nextBlock then
+                                    blockCanvas_:ReplaceBlocks({})
+                                    blockCanvas_:AddBlock(nextBlock, origX, origY)
+                                end
+                                runInternalStep(sIdx + 1)
+                            end)
+                        end
+                        runInternalStep(1)
+                    else
+                        -- 已是正常形式 → 结果飞出
+                        flyOutResult()
+                    end
+                    return
+                end
+
+                local inputStr = inputTokens[inputIdx]
+                local roots = blockCanvas_:GetRootBlocks()
+                local curBlock = roots[1]
+
+                if curBlock and curBlock.kind == "abstraction" then
+                    -- 当前画布是 lambda → 做"喂入"动画
+                    local stepDur = animateFeedInput(curBlock, inputStr, 0.05)
+
+                    blockCanvas_:AddTimedAction(stepDur + STEP_GAP, function()
+                        -- 计算替换结果：body[param := input]
+                        local inputAST = Verifier.Parser.parse(inputStr)
+                        if currentAST and currentAST.kind == "abstraction" and inputAST then
+                            currentAST = AST.substitute(currentAST.body, currentAST.param, inputAST)
+                        end
+                        -- 替换画布为新的积木
+                        local newBlock = ASTToBlock(currentAST)
+                        if newBlock then
+                            blockCanvas_:ReplaceBlocks({})
+                            blockCanvas_:AddBlock(newBlock, origX, origY)
+                        end
+                        -- 喂下一个输入
+                        feedInput(inputIdx + 1)
+                    end)
+                else
+                    -- 当前画布不是 lambda（可能是变量或应用）
+                    -- 用传统 on-canvas 归约处理剩余部分
+                    -- 把剩余输入包装上去
+                    for ii = inputIdx, #inputTokens do
+                        local iAST = Verifier.Parser.parse(inputTokens[ii])
+                        if iAST then
+                            currentAST = AST.App(currentAST, iAST)
+                        end
+                    end
+                    local trace = Evaluator.trace(currentAST, 30)
+                    local reBlock = ASTToBlock(trace[1])
+                    if reBlock then
+                        blockCanvas_:ReplaceBlocks({})
+                        blockCanvas_:AddBlock(reBlock, origX, origY)
+                    end
+                    local numSteps = #trace - 1
+                    local function runFallbackStep(sIdx)
+                        if sIdx > numSteps then
+                            flyOutResult()
+                            return
+                        end
+                        local stepDur = animateOneReduction(0.05)
+                        blockCanvas_:AddTimedAction(stepDur + STEP_GAP, function()
+                            local nextBlock = ASTToBlock(trace[sIdx + 1])
+                            if nextBlock then
+                                blockCanvas_:ReplaceBlocks({})
+                                blockCanvas_:AddBlock(nextBlock, origX, origY)
+                            end
+                            runFallbackStep(sIdx + 1)
+                        end)
+                    end
+                    runFallbackStep(1)
+                end
+            end
+
+            -- 启动第一个输入喂食
+            blockCanvas_:AddTimedAction(0.15, function()
+                feedInput(1)
+            end)
+
+        -- =====================================================================
+        -- 模式 B：raw=true 或无输入 → 在画布已有积木上做归约动画
+        -- =====================================================================
+        else
+            -- 画布上已经是玩家构建的完整表达式
+            -- 获取归约轨迹
+            local trace = Evaluator.trace(fullExpr, 30)
+            local numSteps = #trace - 1
+
+            -- 确保画布显示的是当前表达式
+            local startBlock = ASTToBlock(trace[1])
+            if startBlock then
+                blockCanvas_:ReplaceBlocks({})
+                blockCanvas_:AddBlock(startBlock, origX, origY)
+            end
+
+            local function runStep(stepIdx)
+                if stepIdx > numSteps then
+                    -- 归约完成 → 替换为最终结果 → 飞出
+                    local finalBlock = ASTToBlock(resultAST)
+                    if finalBlock then
+                        blockCanvas_:ReplaceBlocks({})
+                        blockCanvas_:AddBlock(finalBlock, origX, origY)
+                    end
+                    local roots = blockCanvas_:GetRootBlocks()
+                    local outBlock = roots[1]
+                    local outX = outBlock and (outBlock.x + outBlock.w / 2) or (origX + 50)
+                    local outY = outBlock and (outBlock.y + outBlock.h / 2) or (origY + 20)
+                    local outColor = match and { 100, 255, 160 } or { 255, 100, 100 }
+                    blockCanvas_:AddFlowAnim(
+                        resultStr, outX, outY,
+                        outX + 80, outY - 20,
+                        FLY_OUT_DUR, outColor, 0.1
+                    )
+                    blockCanvas_:AddTimedAction(FLY_OUT_DUR + TEST_GAP, function()
+                        runTestCase(tcIdx + 1, onAllDone)
+                    end)
+                    return
+                end
+
+                local stepDur = animateOneReduction(0.05)
+                blockCanvas_:AddTimedAction(stepDur + STEP_GAP, function()
+                    local nextBlock = ASTToBlock(trace[stepIdx + 1])
+                    if nextBlock then
+                        blockCanvas_:ReplaceBlocks({})
+                        blockCanvas_:AddBlock(nextBlock, origX, origY)
+                    end
+                    runStep(stepIdx + 1)
+                end)
+            end
+
+            blockCanvas_:AddTimedAction(0.15, function()
+                runStep(1)
+            end)
+        end
     end
 
-    -- 动画完成回调
-    blockCanvas_:SetFlowCompleteCallback(function()
+    -- 启动链式测试用例执行
+    runTestCase(1, function()
+        -- 全部测试用例完成 → 恢复原始积木 + 显示结果
+        blockCanvas_:ReplaceBlocks({})
+        blockCanvas_:AddBlock(rootBlock, origX, origY)
         blockCanvas_:SetFrozen(false)
         if pass then
             ShowCampaignFeedback(true, msg)

@@ -51,6 +51,7 @@ function BlockCanvas:Init(props)
     self.flowAnims_ = {}      -- { text, x, y, toX, toY, elapsed, duration, color, opacity, scale }
     self.flashBlocks_ = {}    -- { block, elapsed, duration, color } 积木闪烁效果
     self.flowCallback_ = nil  -- 所有动画播完后的回调
+    self.timedActions_ = {}   -- { delay, fired, fn } 定时动作（延迟触发回调）
 
     -- 双击检测
     self.lastClickTime_ = 0
@@ -222,6 +223,13 @@ function BlockCanvas:AddVarReplace(block, newText, duration, color, delay)
     })
 end
 
+--- 添加定时动作（在指定延迟后执行回调，可用于动画中途替换积木树等）
+---@param delay number 延迟秒数（从添加时刻计）
+---@param fn function 回调
+function BlockCanvas:AddTimedAction(delay, fn)
+    table.insert(self.timedActions_, { elapsed = -(delay or 0), fired = false, fn = fn })
+end
+
 --- 设置动画全部完成后的回调
 function BlockCanvas:SetFlowCompleteCallback(fn)
     self.flowCallback_ = fn
@@ -231,6 +239,7 @@ end
 function BlockCanvas:ClearAnims()
     self.flowAnims_ = {}
     self.flashBlocks_ = {}
+    self.timedActions_ = {}
     self.flowCallback_ = nil
 end
 
@@ -242,7 +251,18 @@ function BlockCanvas:HasActiveAnims()
     for _, f in ipairs(self.flashBlocks_) do
         if f.alive then return true end
     end
+    for _, t in ipairs(self.timedActions_) do
+        if not t.fired then return true end
+    end
     return false
+end
+
+--- 替换画布上所有积木（动画中途用于展示归约中间状态）
+---@param newBlocks table[] 新的根积木数组
+function BlockCanvas:ReplaceBlocks(newBlocks)
+    self.blocks_ = newBlocks or {}
+    self.selectedBlock_ = nil
+    self.dragBlock_ = nil
 end
 
 --- 清空画布
@@ -492,14 +512,27 @@ function BlockCanvas:Update(dt)
             end
         end
     end
+    -- 更新定时动作
+    for _, t in ipairs(self.timedActions_) do
+        if not t.fired then
+            t.elapsed = t.elapsed + dt
+            if t.elapsed >= 0 then
+                t.fired = true
+                t.fn()
+            else
+                anyAlive = true
+            end
+        end
+    end
     -- 所有动画完成后触发回调
     if not anyAlive and self.flowCallback_ then
         -- 确认确实有过动画（非空列表）
-        if #self.flowAnims_ > 0 or #self.flashBlocks_ > 0 then
+        if #self.flowAnims_ > 0 or #self.flashBlocks_ > 0 or #self.timedActions_ > 0 then
             local cb = self.flowCallback_
             self.flowCallback_ = nil
             self.flowAnims_ = {}
             self.flashBlocks_ = {}
+            self.timedActions_ = {}
             cb()
         end
     end
