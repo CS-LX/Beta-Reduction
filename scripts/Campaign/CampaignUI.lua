@@ -348,16 +348,14 @@ function CampaignUI.createLevelHUD(levelId)
         text = level.description,
         fontSize = 12,
         fontColor = { 200, 210, 230, 220 },
-        numberOfLines = 4,
     }
 
     -- 反馈面板 (验证结果)
     feedbackLabel_ = UI.Label {
         id = "feedback",
         text = "",
-        fontSize = 13,
+        fontSize = 12,
         fontColor = { 255, 200, 100, 255 },
-        numberOfLines = 3,
     }
 
     feedbackPanel_ = UI.Panel {
@@ -373,8 +371,96 @@ function CampaignUI.createLevelHUD(levelId)
         children = { feedbackLabel_ },
     }
 
-    -- 教程面板
-    tutorialPanel_ = CampaignUI._createTutorialPanel(level)
+    -- 教程内容 (嵌入右侧面板)
+    local tutorialChildren = {}
+    if level.tutorial and #level.tutorial > 0 then
+        -- 教程分隔线
+        table.insert(tutorialChildren, UI.Panel {
+            width = "100%", height = 1,
+            backgroundColor = { 50, 60, 90, 80 },
+            marginTop = 4, marginBottom = 4,
+        })
+        for _, line in ipairs(level.tutorial) do
+            table.insert(tutorialChildren, UI.Label {
+                text = line,
+                fontSize = 11,
+                fontColor = { 190, 200, 220, 200 },
+            })
+        end
+    end
+
+    -- 构建右侧面板内容
+    local panelChildren = {
+        -- 关卡标题
+        UI.Label {
+            text = level.id .. " " .. level.title,
+            fontSize = 14,
+            fontColor = { 140, 200, 255, 255 },
+        },
+        UI.Label {
+            text = level.subtitle,
+            fontSize = 11,
+            fontColor = { 120, 130, 160, 160 },
+        },
+        -- 分隔线
+        UI.Panel {
+            width = "100%", height = 1,
+            backgroundColor = { 50, 60, 90, 80 },
+            marginTop = 4, marginBottom = 4,
+        },
+        -- 目标描述
+        objectiveLabel_,
+        -- 反馈
+        feedbackPanel_,
+    }
+
+    -- 插入教程内容
+    for _, child in ipairs(tutorialChildren) do
+        table.insert(panelChildren, child)
+    end
+
+    -- 按钮区
+    table.insert(panelChildren, UI.Panel {
+        width = "100%",
+        flexDirection = "row",
+        gap = 6,
+        marginTop = 8,
+        children = {
+            UI.Button {
+                text = "提交",
+                variant = "success",
+                size = "sm",
+                flex = 1,
+                onClick = function()
+                    if callbacks.onSubmitAnswer then
+                        callbacks.onSubmitAnswer()
+                    end
+                end,
+            },
+            UI.Button {
+                text = "提示",
+                variant = "outline",
+                size = "sm",
+                flex = 1,
+                onClick = function()
+                    CampaignUI.showHint()
+                end,
+            },
+        }
+    })
+    table.insert(panelChildren, UI.Button {
+        text = "← 退出关卡",
+        variant = "ghost",
+        size = "sm",
+        width = "100%",
+        marginTop = 4,
+        fontColor = { 180, 130, 100, 200 },
+        onClick = function()
+            if callbacks.onExitLevel then
+                callbacks.onExitLevel()
+            end
+        end,
+    })
 
     levelHUDRoot_ = UI.Panel {
         id = "levelHUD",
@@ -382,153 +468,39 @@ function CampaignUI.createLevelHUD(levelId)
         height = "100%",
         position = "absolute",
         top = 0, left = 0,
-        pointerEvents = "box-none",  -- 容器不拦截事件，子元素(按钮等)可点击
+        pointerEvents = "box-none",
         children = {
-            -- 右侧: 目标 + 操作
-            UI.Panel {
+            -- 右侧: 统一面板 (目标 + 教程 + 按钮)
+            UI.ScrollView {
                 position = "absolute",
                 top = 8,
                 right = 8,
-                width = 210,
-                flexDirection = "column",
-                gap = 8,
-                paddingTop = 10,
-                paddingBottom = 10,
-                paddingLeft = 10,
-                paddingRight = 10,
+                width = 230,
+                maxHeight = "90%",
                 borderRadius = 8,
                 backgroundColor = { 18, 20, 32, 220 },
                 borderWidth = 1,
                 borderColor = { 50, 60, 100, 100 },
                 children = {
-                    -- 关卡标题
-                    UI.Label {
-                        text = level.id .. " " .. level.title,
-                        fontSize = 14,
-                        fontColor = { 140, 200, 255, 255 },
-                    },
-                    UI.Label {
-                        text = level.subtitle,
-                        fontSize = 11,
-                        fontColor = { 120, 130, 160, 160 },
-                    },
-                    -- 分隔线
-                    UI.Panel {
-                        width = "100%", height = 1,
-                        backgroundColor = { 50, 60, 90, 80 },
-                        marginTop = 4, marginBottom = 4,
-                    },
-                    -- 目标描述
-                    objectiveLabel_,
-                    -- 反馈
-                    feedbackPanel_,
-                    -- 按钮
                     UI.Panel {
                         width = "100%",
-                        flexDirection = "row",
-                        gap = 6,
-                        marginTop = 6,
-                        children = {
-                            UI.Button {
-                                text = "提交",
-                                variant = "success",
-                                size = "sm",
-                                flex = 1,
-                                onClick = function()
-                                    if callbacks.onSubmitAnswer then
-                                        callbacks.onSubmitAnswer()
-                                    end
-                                end,
-                            },
-                            UI.Button {
-                                text = "提示",
-                                variant = "outline",
-                                size = "sm",
-                                flex = 1,
-                                onClick = function()
-                                    CampaignUI.showHint()
-                                end,
-                            },
-                        }
-                    },
-                    UI.Button {
-                        text = "← 退出关卡",
-                        variant = "ghost",
-                        size = "sm",
-                        width = "100%",
-                        marginTop = 4,
-                        fontColor = { 180, 130, 100, 200 },
-                        onClick = function()
-                            if callbacks.onExitLevel then
-                                callbacks.onExitLevel()
-                            end
-                        end,
-                    },
+                        flexDirection = "column",
+                        gap = 5,
+                        paddingTop = 10,
+                        paddingBottom = 10,
+                        paddingLeft = 12,
+                        paddingRight = 12,
+                        children = panelChildren,
+                    }
                 }
             },
-            -- 右侧: 教程面板
-            tutorialPanel_,
         }
     }
 
     return levelHUDRoot_
 end
 
---- 创建教程面板 (右侧)
-function CampaignUI._createTutorialPanel(level)
-    if not level.tutorial or #level.tutorial == 0 then
-        return UI.Panel {}
-    end
 
-    local lines = {}
-    for _, line in ipairs(level.tutorial) do
-        table.insert(lines, UI.Label {
-            text = line,
-            fontSize = 11,
-            fontColor = { 190, 200, 220, 210 },
-            numberOfLines = 3,
-        })
-    end
-
-    return UI.Panel {
-        position = "absolute",
-        bottom = 8,
-        left = 8,
-        width = 240,
-        maxHeight = 300,
-        flexDirection = "column",
-        gap = 3,
-        paddingTop = 10,
-        paddingBottom = 10,
-        paddingLeft = 10,
-        paddingRight = 10,
-        borderRadius = 8,
-        backgroundColor = { 18, 20, 32, 210 },
-        borderWidth = 1,
-        borderColor = { 50, 60, 100, 80 },
-        children = {
-            UI.Label {
-                text = "教程",
-                fontSize = 12,
-                fontColor = { 140, 200, 255, 220 },
-                marginBottom = 6,
-            },
-            UI.ScrollView {
-                width = "100%",
-                flex = 1,
-                maxHeight = 340,
-                children = {
-                    UI.Panel {
-                        width = "100%",
-                        flexDirection = "column",
-                        gap = 2,
-                        children = lines,
-                    }
-                }
-            },
-        }
-    }
-end
 
 -- ============================================================================
 -- HUD 交互
