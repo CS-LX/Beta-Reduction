@@ -88,8 +88,8 @@ function CampaignUI.createMainMenu()
                         size = "lg",
                         width = 220,
                         onClick = function()
-                            if callbacks.onEnterLevel then
-                                CampaignUI.showLevelSelect()
+                            if callbacks.onShowLevelSelect then
+                                callbacks.onShowLevelSelect()
                             end
                         end,
                     },

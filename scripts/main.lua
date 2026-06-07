@@ -149,6 +149,9 @@ function SetupCampaignCallbacks()
         onShowHint = function()
             CampaignUI.showHint()
         end,
+        onShowLevelSelect = function()
+            EnterCampaignSelect()
+        end,
     })
 end
 
