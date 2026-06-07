@@ -1076,12 +1076,30 @@ local function findLambdaInFunc(block)
     return nil
 end
 
---- 白箱归约动画：展示槽位级 IO + 内部替换过程
---- 动画流程（单步 β-归约 (λx.body) arg）：
----   1. 输入胶囊飘向 Application 的 arg 槽 → arg 槽高亮
----   2. Lambda header 高亮 → 显示 "x → value" 替换标签
----   3. body 内匹配 x 的 variable 积木依次闪烁
----   4. body 槽高亮 → 结果胶囊从 body 飘出
+--- 获取槽位的精确画布中心坐标（优先用子积木实际位置）
+---@param parentBlock table 父积木
+---@param slotKey string 槽位名
+---@return number x, number y
+local function getSlotCenter(parentBlock, slotKey)
+    local slot = parentBlock.slots and parentBlock.slots[slotKey]
+    if not slot then
+        return parentBlock.x + parentBlock.w / 2, parentBlock.y + parentBlock.h / 2
+    end
+    if slot.child then
+        -- 子积木已经有绝对坐标（layout 已设置）
+        return slot.child.x + slot.child.w / 2, slot.child.y + slot.child.h / 2
+    end
+    -- 空槽位：用相对坐标计算
+    return parentBlock.x + (slot.rx or 0) + (slot.rw or 40) / 2,
+           parentBlock.y + (slot.ry or 0) + (slot.rh or 30) / 2
+end
+
+--- 白箱归约动画：展示槽位级 IO + 内部数据流 + 变量替换过程
+--- 动画流程（β-归约 (λx.body) arg）：
+---   1. 输入胶囊精确飞入 arg 槽中心 → 槽位高亮
+---   2. Lambda header 高亮 + "x → value" 标签
+---   3. 值从 lambda header 沿路径流向 body 内每个匹配变量 → 变量被替换
+---   4. 结果从 body 槽精确飞出
 function PlayCanvasFlowAnimation(rootBlock, playerAST, testCases, pass, msg, level)
     if not blockCanvas_ then return end
 
@@ -1093,14 +1111,15 @@ function PlayCanvasFlowAnimation(rootBlock, playerAST, testCases, pass, msg, lev
     local bx, by, bw, bh = rootBlock.x, rootBlock.y, rootBlock.w, rootBlock.h
 
     -- 时序常量
-    local FLY_DUR = 0.5        -- 胶囊飘动时间
-    local SLOT_HL_DUR = 0.6    -- 槽位高亮持续
-    local SUBST_DUR = 0.7      -- 替换标签持续
-    local VAR_FLASH_DUR = 0.4  -- 变量积木闪烁
-    local GAP = 0.15           -- 步骤间间隔
-    local TEST_GAP = 0.4       -- 测试用例间间隔
+    local FLY_DUR = 0.45       -- 外部胶囊飘动时间
+    local SLOT_HL_DUR = 0.4    -- 槽位高亮持续
+    local INTERNAL_DUR = 0.35  -- 内部流动到每个变量的时间
+    local REPLACE_DUR = 0.5    -- 变量替换显示时间
+    local SUBST_DUR = 0.6      -- 替换标签持续
+    local GAP = 0.1            -- 步骤间间隔
+    local TEST_GAP = 0.5       -- 测试用例间间隔
 
-    local totalDelay = 0.2
+    local totalDelay = 0.15
 
     for _, tc in ipairs(testCases) do
         local inputTokens = Verifier._splitInputs(tc.input)
@@ -1111,81 +1130,94 @@ function PlayCanvasFlowAnimation(rootBlock, playerAST, testCases, pass, msg, lev
         -- 对每个输入依次执行一轮 β-归约可视化
         if #inputTokens > 0 then
             for idx, inputStr in ipairs(inputTokens) do
-                -- 构造表达式：(current) inputN
+                -- 构造表达式
                 local inputAST = Verifier.Parser.parse(inputStr)
                 if inputAST then
                     expr = AST.App(expr, inputAST)
                 end
 
-                -- === 阶段 1: 输入飘向 arg 槽 ===
-                -- 确定 arg 槽的画布绝对坐标
+                -- === 阶段 1: 输入飞入 arg 槽 ===
                 local appBlock = findOutermostApp(rootBlock)
-                local argTargetX, argTargetY
-                if appBlock and appBlock.slots.arg then
-                    local slot = appBlock.slots.arg
-                    argTargetX = appBlock.x + (slot.rx or 0) + (slot.rw or 40) / 2
-                    argTargetY = appBlock.y + (slot.ry or 0) + (slot.rh or 30) / 2
+                local argCX, argCY
+                if appBlock then
+                    argCX, argCY = getSlotCenter(appBlock, "arg")
                 else
-                    -- 回退：积木右侧中间
-                    argTargetX = bx + bw * 0.75
-                    argTargetY = by + bh * 0.5
+                    argCX = bx + bw * 0.75
+                    argCY = by + bh * 0.5
                 end
 
-                local inStartX = bx - 60 - (idx - 1) * 25
-                local inStartY = by - 40
+                -- 起始位置：积木右上方
+                local inStartX = bx + bw + 40 + (idx - 1) * 20
+                local inStartY = by - 20
 
                 blockCanvas_:AddFlowAnim(
                     inputStr, inStartX, inStartY,
-                    argTargetX, argTargetY,
+                    argCX, argCY,
                     FLY_DUR, { 100, 200, 255 }, totalDelay
                 )
                 totalDelay = totalDelay + FLY_DUR
 
-                -- arg 槽高亮（数据到达）
+                -- arg 槽高亮
                 if appBlock then
                     blockCanvas_:AddSlotHighlight(
                         appBlock, "arg", SLOT_HL_DUR,
                         { 100, 200, 255 }, totalDelay
                     )
                 end
-                totalDelay = totalDelay + GAP
+                totalDelay = totalDelay + SLOT_HL_DUR * 0.5
 
-                -- === 阶段 2: 替换可视化 ===
+                -- === 阶段 2: 内部替换可视化 ===
                 local lambda = findLambdaInFunc(rootBlock)
                 if lambda then
                     -- Lambda header 高亮（参数绑定）
                     blockCanvas_:AddFlashBlock(
-                        lambda, 0.5, { 200, 140, 255 }, totalDelay
+                        lambda, 0.4, { 200, 140, 255 }, totalDelay
                     )
-                    totalDelay = totalDelay + 0.2
 
-                    -- 替换标签 "x → value"
+                    -- "x → value" 标签在 header 上方
                     local labelText = lambda.param .. " \xe2\x86\x92 " .. inputStr
                     local labelX = lambda.x + lambda.w / 2
-                    local labelY = lambda.y - 4
+                    local labelY = lambda.y - 2
                     blockCanvas_:AddSubstitutionLabel(
                         labelX, labelY, labelText,
                         SUBST_DUR, { 255, 200, 80 }, totalDelay
                     )
-                    totalDelay = totalDelay + 0.25
+                    totalDelay = totalDelay + 0.3
 
-                    -- body 内匹配参数的 variable 积木依次闪烁
+                    -- === 阶段 3: 数据从 header 流向 body 内每个变量 ===
+                    -- 流动起点 = lambda header 中心
+                    local flowStartX = lambda.x + lambda.w / 2
+                    local flowStartY = lambda.y + BlockDefs.HEADER_H
+
                     local bodyBlock = lambda.slots.body.child
                     if bodyBlock then
                         local varBlocks = collectVarBlocks(bodyBlock, lambda.param, {})
                         for vi, vb in ipairs(varBlocks) do
-                            blockCanvas_:AddFlashBlock(
-                                vb, VAR_FLASH_DUR, { 255, 180, 80 },
-                                totalDelay + (vi - 1) * 0.2
+                            -- 内部流动：从 header 底部流向变量积木中心
+                            local varCX = vb.x + vb.w / 2
+                            local varCY = vb.y + vb.h / 2
+                            blockCanvas_:AddInternalFlow(
+                                inputStr,
+                                flowStartX, flowStartY,
+                                varCX, varCY,
+                                INTERNAL_DUR,
+                                { 255, 180, 80 },
+                                totalDelay + (vi - 1) * (INTERNAL_DUR + 0.05)
+                            )
+                            -- 流动到达后：变量积木显示替换效果
+                            local replaceDelay = totalDelay + (vi - 1) * (INTERNAL_DUR + 0.05) + INTERNAL_DUR
+                            blockCanvas_:AddVarReplace(
+                                vb, inputStr, REPLACE_DUR,
+                                { 255, 180, 80 }, replaceDelay
                             )
                         end
                         if #varBlocks > 0 then
-                            totalDelay = totalDelay + (#varBlocks - 1) * 0.2 + VAR_FLASH_DUR
+                            totalDelay = totalDelay + (#varBlocks) * (INTERNAL_DUR + 0.05) + REPLACE_DUR * 0.5
                         end
                     end
                     totalDelay = totalDelay + GAP
                 else
-                    -- 非 lambda（可能是纯 application 或 variable），整块闪烁
+                    -- 非 lambda：整块闪烁
                     blockCanvas_:AddFlashBlock(
                         rootBlock, 0.5, { 200, 160, 255 }, totalDelay
                     )
@@ -1196,16 +1228,15 @@ function PlayCanvasFlowAnimation(rootBlock, playerAST, testCases, pass, msg, lev
                 expr = Evaluator.reduceToNF(expr, 200) or expr
             end
         else
-            -- 无输入：直接运行标记
+            -- 无输入：直接运行
             blockCanvas_:AddFlowAnim(
                 "\xe2\x96\xb6 run",
-                bx - 60, by - 40,
+                bx + bw + 40, by,
                 bx + bw / 2, by + bh / 2,
                 FLY_DUR, { 180, 180, 100 }, totalDelay
             )
             totalDelay = totalDelay + FLY_DUR
 
-            -- 整体归约闪烁
             blockCanvas_:AddFlashBlock(
                 rootBlock, 0.5, { 200, 160, 255 }, totalDelay
             )
@@ -1214,31 +1245,29 @@ function PlayCanvasFlowAnimation(rootBlock, playerAST, testCases, pass, msg, lev
             expr = Evaluator.reduceToNF(expr, 200) or expr
         end
 
-        -- === 阶段 3: 结果从 body 槽飘出 ===
+        -- === 阶段 4: 结果从 body 精确飞出 ===
         local resultStr = expr and AST.toString(expr) or "?"
 
-        -- 确定输出起点（body 槽的位置）
         local outStartX, outStartY
-        local lambda = findLambdaInFunc(rootBlock)
-        if lambda and lambda.slots.body then
-            local slot = lambda.slots.body
-            outStartX = lambda.x + (slot.rx or 0) + (slot.rw or 40) / 2
-            outStartY = lambda.y + (slot.ry or 0) + (slot.rh or 30) / 2
+        local lambdaOut = findLambdaInFunc(rootBlock)
+        if lambdaOut and lambdaOut.slots.body then
+            outStartX, outStartY = getSlotCenter(lambdaOut, "body")
             -- body 槽高亮（结果产出）
             blockCanvas_:AddSlotHighlight(
-                lambda, "body", SLOT_HL_DUR,
+                lambdaOut, "body", SLOT_HL_DUR,
                 { 100, 255, 160 }, totalDelay
             )
         else
-            outStartX = bx + bw * 0.5
-            outStartY = by + bh * 0.5
+            outStartX = bx + bw / 2
+            outStartY = by + bh / 2
         end
-        totalDelay = totalDelay + GAP
+        totalDelay = totalDelay + SLOT_HL_DUR * 0.5
 
+        -- 结果飞向右下
         local outEndX = bx + bw + 80
-        local outEndY = by + bh + 50
+        local outEndY = by + bh + 30
 
-        -- 判断结果正确性
+        -- 判断正确性
         local expectAST = Verifier.Parser.parse(tc.expect)
         local match = false
         if expr and expectAST then
@@ -1260,7 +1289,7 @@ function PlayCanvasFlowAnimation(rootBlock, playerAST, testCases, pass, msg, lev
         totalDelay = totalDelay + FLY_DUR + TEST_GAP
     end
 
-    -- 动画完成后的回调
+    -- 动画完成回调
     blockCanvas_:SetFlowCompleteCallback(function()
         blockCanvas_:SetFrozen(false)
         if pass then

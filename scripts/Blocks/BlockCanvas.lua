@@ -181,6 +181,47 @@ function BlockCanvas:AddSubstitutionLabel(x, y, text, duration, color, delay)
     })
 end
 
+--- 添加内部数据流动画（值从源点沿连线流向目标变量积木）
+--- 带粒子拖尾效果，展示数据在 lambda 内部的流动路径
+---@param text string 显示文本（值）
+---@param fromX number 起始 X
+---@param fromY number 起始 Y
+---@param toX number 目标 X
+---@param toY number 目标 Y
+---@param duration number 持续时间
+---@param color number[] 颜色
+---@param delay number 延迟
+function BlockCanvas:AddInternalFlow(text, fromX, fromY, toX, toY, duration, color, delay)
+    table.insert(self.flowAnims_, {
+        text = text,
+        fromX = fromX, fromY = fromY,
+        toX = toX, toY = toY,
+        elapsed = -(delay or 0),
+        duration = duration or 0.4,
+        color = color or { 255, 200, 80 },
+        alive = true,
+        isInternal = true,  -- 内部流动（带连线 + 拖尾）
+    })
+end
+
+--- 添加变量替换动画（变量积木变色+变文字，展示替换结果）
+---@param block table 被替换的变量积木
+---@param newText string 替换后显示的文本
+---@param duration number 持续时间
+---@param color number[] 新颜色
+---@param delay number 延迟
+function BlockCanvas:AddVarReplace(block, newText, duration, color, delay)
+    table.insert(self.flashBlocks_, {
+        block = block,
+        elapsed = -(delay or 0),
+        duration = duration or 0.6,
+        color = color or { 255, 200, 80 },
+        alive = true,
+        isReplace = true,   -- 标记为替换动画
+        newText = newText,  -- 替换后的文字
+    })
+end
+
 --- 设置动画全部完成后的回调
 function BlockCanvas:SetFlowCompleteCallback(fn)
     self.flowCallback_ = fn
@@ -498,37 +539,61 @@ function BlockCanvas:Render(nvg)
         self:_renderBlock(nvg, block)
     end
 
-    -- 渲染积木闪烁效果（支持整块 or 槽位级高亮）
+    -- 渲染积木闪烁效果（支持整块 / 槽位级高亮 / 变量替换）
     for _, f in ipairs(self.flashBlocks_) do
         if f.alive and f.elapsed >= 0 then
             local t = f.elapsed / f.duration
-            local pulse = math.sin(t * math.pi) * 0.7
-            local alpha = math.floor(pulse * 180)
-            if alpha > 0 then
-                local b = f.block
-                local hx, hy, hw, hh
-                if f.slotKey and b.slots and b.slots[f.slotKey] then
-                    -- 槽位级高亮：只高亮指定插槽区域
-                    local slot = b.slots[f.slotKey]
-                    hx = b.x + (slot.rx or 0) - 3
-                    hy = b.y + (slot.ry or 0) - 3
-                    hw = (slot.rw or 40) + 6
-                    hh = (slot.rh or 30) + 6
-                else
-                    -- 整块高亮
-                    hx = b.x - 2
-                    hy = b.y - 2
-                    hw = b.w + 4
-                    hh = b.h + 4
+            local b = f.block
+
+            if f.isReplace then
+                -- 变量替换动画：覆盖积木显示新值（淡入橙色胶囊+新文字）
+                local fadeIn = math.min(1, t * 3)           -- 0~0.33 淡入
+                local fadeOut = math.max(0, (t - 0.7) / 0.3) -- 0.7~1.0 淡出
+                local alpha = math.floor((fadeIn - fadeOut) * 220)
+                if alpha > 0 then
+                    local hx, hy, hw, hh = b.x, b.y, b.w, b.h
+                    local r = hh / 2
+                    -- 橙色覆盖胶囊（替换后的值）
+                    nvgBeginPath(nvg)
+                    nvgRoundedRect(nvg, hx - 2, hy - 1, hw + 4, hh + 2, r)
+                    nvgFillColor(nvg, nvgRGBA(f.color[1], f.color[2], f.color[3], math.floor(alpha * 0.5)))
+                    nvgFill(nvg)
+                    nvgStrokeColor(nvg, nvgRGBA(f.color[1], f.color[2], f.color[3], alpha))
+                    nvgStrokeWidth(nvg, 1.8)
+                    nvgStroke(nvg)
+                    -- 新文字
+                    nvgFontFace(nvg, "sans")
+                    nvgFontSize(nvg, 12)
+                    nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+                    nvgFillColor(nvg, nvgRGBA(255, 255, 255, alpha))
+                    nvgText(nvg, hx + hw / 2, hy + hh / 2, f.newText or "?")
                 end
-                nvgBeginPath(nvg)
-                nvgRoundedRect(nvg, hx, hy, hw, hh, 8)
-                nvgFillColor(nvg, nvgRGBA(f.color[1], f.color[2], f.color[3], alpha))
-                nvgFill(nvg)
-                -- 边缘描边让高亮更清晰
-                nvgStrokeColor(nvg, nvgRGBA(f.color[1], f.color[2], f.color[3], math.min(255, alpha + 60)))
-                nvgStrokeWidth(nvg, 1.5)
-                nvgStroke(nvg)
+            else
+                -- 普通高亮（整块 or 槽位）
+                local pulse = math.sin(t * math.pi) * 0.7
+                local alpha = math.floor(pulse * 180)
+                if alpha > 0 then
+                    local hx, hy, hw, hh
+                    if f.slotKey and b.slots and b.slots[f.slotKey] then
+                        local slot = b.slots[f.slotKey]
+                        hx = b.x + (slot.rx or 0) - 3
+                        hy = b.y + (slot.ry or 0) - 3
+                        hw = (slot.rw or 40) + 6
+                        hh = (slot.rh or 30) + 6
+                    else
+                        hx = b.x - 2
+                        hy = b.y - 2
+                        hw = b.w + 4
+                        hh = b.h + 4
+                    end
+                    nvgBeginPath(nvg)
+                    nvgRoundedRect(nvg, hx, hy, hw, hh, 8)
+                    nvgFillColor(nvg, nvgRGBA(f.color[1], f.color[2], f.color[3], alpha))
+                    nvgFill(nvg)
+                    nvgStrokeColor(nvg, nvgRGBA(f.color[1], f.color[2], f.color[3], math.min(255, alpha + 60)))
+                    nvgStrokeWidth(nvg, 1.5)
+                    nvgStroke(nvg)
+                end
             end
         end
     end
@@ -550,7 +615,37 @@ function BlockCanvas:Render(nvg)
                 alpha = math.floor((1 - t) / 0.25 * 240)
             end
 
-            if a.isLabel then
+            if a.isInternal then
+                -- 内部数据流：带虚线连接 + 小粒子头
+                -- 画连线路径（从 from 到当前位置）
+                local trailAlpha = math.floor(alpha * 0.4)
+                nvgBeginPath(nvg)
+                nvgMoveTo(nvg, a.fromX, a.fromY)
+                -- 轻微弯曲路径
+                local midX = (a.fromX + cx) / 2
+                local midY = math.min(a.fromY, cy) - 12
+                nvgQuadTo(nvg, midX, midY, cx, cy)
+                nvgStrokeColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], trailAlpha))
+                nvgStrokeWidth(nvg, 2)
+                nvgStroke(nvg)
+
+                -- 流动头部小圆点 + 文字
+                local dotR = 10
+                nvgBeginPath(nvg)
+                nvgCircle(nvg, cx, cy, dotR)
+                nvgFillColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], math.floor(alpha * 0.7)))
+                nvgFill(nvg)
+                nvgStrokeColor(nvg, nvgRGBA(255, 255, 255, alpha))
+                nvgStrokeWidth(nvg, 1.2)
+                nvgStroke(nvg)
+                -- 文字
+                nvgFontFace(nvg, "sans")
+                nvgFontSize(nvg, 9)
+                nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+                nvgFillColor(nvg, nvgRGBA(255, 255, 255, alpha))
+                nvgText(nvg, cx, cy, a.text)
+
+            elseif a.isLabel then
                 -- 替换指示器：无弧线，大字体，带背景板
                 local tw = math.max(50, #a.text * 7 + 20)
                 local th = 20
