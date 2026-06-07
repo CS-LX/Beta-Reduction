@@ -1007,9 +1007,15 @@ end
 
 function DeleteSelected()
     if currentView_ == "graph" then
-        if lambdaGraph_ and lambdaGraph_.selectedId_ then
-            lambdaGraph_:RemoveNode(lambdaGraph_.selectedId_)
-            UpdateInspector()
+        if lambdaGraph_ then
+            -- 优先删除选中的连线
+            if lambdaGraph_.selectedEdgeIdx_ then
+                lambdaGraph_:RemoveSelectedEdge()
+                UpdateInspector()
+            elseif lambdaGraph_.selectedId_ then
+                lambdaGraph_:RemoveNode(lambdaGraph_.selectedId_)
+                UpdateInspector()
+            end
         end
     else
         if blockCanvas_ then

@@ -79,6 +79,7 @@ function LambdaGraph:Init(props)
     self.connectEndY_ = 0
     self.selectedId_ = nil
     self.hoveredId_ = nil
+    self.selectedEdgeIdx_ = nil  -- 选中的连线索引
 
     -- 双击检测
     self.lastClickTime_ = 0
@@ -360,6 +361,48 @@ function LambdaGraph:HitPort(cx, cy)
     return nil
 end
 
+--- 边命中检测：对贝塞尔曲线采样，检查点击位置是否靠近某条边
+function LambdaGraph:HitEdge(cx, cy)
+    local threshold = 8 / self.zoom_  -- 容差（屏幕 8px）
+    for idx, edge in ipairs(self.edges_) do
+        local fromNode = self.nodes_[edge.fromNodeId]
+        local toNode = self.nodes_[edge.toNodeId]
+        if fromNode and toNode then
+            local x1, y1 = self:GetOutputPortPos(fromNode, edge.fromPortIdx)
+            local x2, y2 = self:GetInputPortPos(toNode, edge.toPortIdx)
+            local cpDist = math.abs(x2 - x1) * 0.4 + 40
+            -- 对曲线采样 20 个点
+            for s = 0, 20 do
+                local t = s / 20
+                local it = 1 - t
+                local bx = it*it*it*x1 + 3*it*it*t*(x1+cpDist) + 3*it*t*t*(x2-cpDist) + t*t*t*x2
+                local by = it*it*it*y1 + 3*it*it*t*y1 + 3*it*t*t*y2 + t*t*t*y2
+                local dx, dy = cx - bx, cy - by
+                if dx*dx + dy*dy <= threshold * threshold then
+                    return idx
+                end
+            end
+        end
+    end
+    return nil
+end
+
+--- 删除选中的边
+function LambdaGraph:RemoveSelectedEdge()
+    if not self.selectedEdgeIdx_ then return false end
+    local edge = self.edges_[self.selectedEdgeIdx_]
+    if not edge then
+        self.selectedEdgeIdx_ = nil
+        return false
+    end
+    self:Disconnect(edge.toNodeId, edge.toPortIdx)
+    self.selectedEdgeIdx_ = nil
+    if self.onSelectionChanged_ then
+        self.onSelectionChanged_(nil)
+    end
+    return true
+end
+
 -- ============================================================================
 -- 交互事件
 -- ============================================================================
@@ -368,8 +411,21 @@ function LambdaGraph:OnPointerDown(event)
     Widget.OnPointerDown(self, event)
     local cx, cy = self:ScreenToCanvas(event.x, event.y)
 
-    -- 右键/中键：平移
-    if event.button == PointerEvent.Button.Right or event.button == PointerEvent.Button.Middle then
+    -- 右键/中键：平移（右键点击连线则删除）
+    if event.button == PointerEvent.Button.Right then
+        local edgeIdx = self:HitEdge(cx, cy)
+        if edgeIdx then
+            -- 右键点击连线 → 直接删除
+            self.selectedEdgeIdx_ = edgeIdx
+            self:RemoveSelectedEdge()
+            return true
+        end
+        self.isPanning_ = true
+        self.lastPanX_ = event.x
+        self.lastPanY_ = event.y
+        return true
+    end
+    if event.button == PointerEvent.Button.Middle then
         self.isPanning_ = true
         self.lastPanX_ = event.x
         self.lastPanY_ = event.y
@@ -405,6 +461,7 @@ function LambdaGraph:OnPointerDown(event)
             self.lastClickTime_ = now
 
             self.selectedId_ = nodeId
+            self.selectedEdgeIdx_ = nil
             self.isDragging_ = true
             self.dragNodeId_ = nodeId
             local node = self.nodes_[nodeId]
@@ -416,8 +473,20 @@ function LambdaGraph:OnPointerDown(event)
             return true
         end
 
+        -- 检测连线点击
+        local edgeIdx = self:HitEdge(cx, cy)
+        if edgeIdx then
+            self.selectedEdgeIdx_ = edgeIdx
+            self.selectedId_ = nil
+            if self.onSelectionChanged_ then
+                self.onSelectionChanged_(nil)  -- 取消节点选中
+            end
+            return true
+        end
+
         -- 点击空白取消选择
         self.selectedId_ = nil
+        self.selectedEdgeIdx_ = nil
         if self.onSelectionChanged_ then
             self.onSelectionChanged_(nil)
         end
@@ -584,12 +653,13 @@ function LambdaGraph:DrawGrid(nvg, layout)
 end
 
 function LambdaGraph:DrawEdges(nvg)
-    for _, edge in ipairs(self.edges_) do
+    for idx, edge in ipairs(self.edges_) do
         local fromNode = self.nodes_[edge.fromNodeId]
         local toNode = self.nodes_[edge.toNodeId]
         if fromNode and toNode then
             local x1, y1 = self:GetOutputPortPos(fromNode, edge.fromPortIdx)
             local x2, y2 = self:GetInputPortPos(toNode, edge.toPortIdx)
+            local isSelected = (idx == self.selectedEdgeIdx_)
 
             local cpDist = math.abs(x2 - x1) * 0.4 + 40
             nvgBeginPath(nvg)
@@ -597,15 +667,25 @@ function LambdaGraph:DrawEdges(nvg)
             nvgBezierTo(nvg, x1 + cpDist, y1, x2 - cpDist, y2, x2, y2)
 
             -- 发光效果
-            nvgStrokeColor(nvg, nvgRGBA(COLORS.edge[1], COLORS.edge[2], COLORS.edge[3], 60))
-            nvgStrokeWidth(nvg, 4)
+            if isSelected then
+                nvgStrokeColor(nvg, nvgRGBA(255, 100, 100, 120))
+                nvgStrokeWidth(nvg, 6)
+            else
+                nvgStrokeColor(nvg, nvgRGBA(COLORS.edge[1], COLORS.edge[2], COLORS.edge[3], 60))
+                nvgStrokeWidth(nvg, 4)
+            end
             nvgStroke(nvg)
 
             nvgBeginPath(nvg)
             nvgMoveTo(nvg, x1, y1)
             nvgBezierTo(nvg, x1 + cpDist, y1, x2 - cpDist, y2, x2, y2)
-            nvgStrokeColor(nvg, nvgRGBA(COLORS.edge[1], COLORS.edge[2], COLORS.edge[3], COLORS.edge[4]))
-            nvgStrokeWidth(nvg, 2)
+            if isSelected then
+                nvgStrokeColor(nvg, nvgRGBA(255, 80, 80, 255))
+                nvgStrokeWidth(nvg, 2.5)
+            else
+                nvgStrokeColor(nvg, nvgRGBA(COLORS.edge[1], COLORS.edge[2], COLORS.edge[3], COLORS.edge[4]))
+                nvgStrokeWidth(nvg, 2)
+            end
             nvgStroke(nvg)
         end
     end
