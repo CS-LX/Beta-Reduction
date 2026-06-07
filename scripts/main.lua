@@ -28,6 +28,7 @@ local currentView_ = "blocks"   -- "blocks" | "graph"
 local evalResult_ = ""
 local evalTrace_ = {}
 local traceIndex_ = 0
+local hintLabel_ = nil          -- 底部提示文字
 
 -- ============================================================================
 -- 生命周期
@@ -80,8 +81,18 @@ function CreateUI()
         id = "blockCanvas",
         width = "100%",
         height = "100%",
-        onBlockChanged = function(ast)
-            UpdateEvaluation(ast)
+        onBlockChanged = function()
+            local sel = blockCanvas_ and blockCanvas_:GetSelected()
+            if sel then
+                local ast = BlockDefs.toAST(sel)
+                UpdateEvaluation(ast)
+            end
+        end,
+        onBlockSelected = function(block)
+            UpdateHint(block)
+        end,
+        onBlockDoubleClick = function(block)
+            ShowRenameDialogFor(block)
         end,
     }
 
@@ -98,6 +109,15 @@ function CreateUI()
             end
             UpdateResultLabel()
         end,
+    }
+
+    -- 底部提示栏
+    hintLabel_ = UI.Label {
+        id = "hintLabel",
+        text = "点击左侧面板添加积木  |  拖拽积木到插槽中组合  |  双击变量重命名",
+        fontSize = 11,
+        fontColor = { 150, 170, 200, 180 },
+        paddingLeft = 12,
     }
 
     uiRoot_ = UI.Panel {
@@ -147,6 +167,18 @@ function CreateUI()
                     -- 右侧：求值面板
                     CreateEvalPanel(),
                 }
+            },
+            -- 底部提示栏
+            UI.Panel {
+                id = "hintBar",
+                width = "100%",
+                height = 28,
+                flexDirection = "row",
+                alignItems = "center",
+                backgroundColor = { 20, 22, 32, 220 },
+                borderTop = 1,
+                borderColor = { 50, 60, 90, 60 },
+                children = { hintLabel_ },
             },
         }
     }
@@ -199,13 +231,6 @@ function CreateToolbar()
             UI.Panel { width = 1, height = 24, backgroundColor = { 60, 70, 100, 100 } },
             -- 操作按钮
             UI.Button {
-                id = "btnPackage",
-                text = "打包为节点",
-                variant = "outline",
-                size = "sm",
-                onClick = function() PackageCurrentBlock() end,
-            },
-            UI.Button {
                 id = "btnEval",
                 text = "求值",
                 variant = "success",
@@ -219,11 +244,34 @@ function CreateToolbar()
                 size = "sm",
                 onClick = function() StepEval() end,
             },
+            UI.Button {
+                id = "btnPackage",
+                text = "打包为节点",
+                variant = "outline",
+                size = "sm",
+                onClick = function() ShowPackageDialog() end,
+            },
+            -- 分隔
+            UI.Panel { width = 1, height = 24, backgroundColor = { 60, 70, 100, 100 } },
+            UI.Button {
+                id = "btnRename",
+                text = "重命名",
+                variant = "ghost",
+                size = "sm",
+                onClick = function() ShowRenameDialog() end,
+            },
+            UI.Button {
+                id = "btnDelete",
+                text = "删除",
+                variant = "danger",
+                size = "sm",
+                onClick = function() DeleteSelected() end,
+            },
             -- 弹性空白
             UI.Panel { flex = 1 },
             -- 提示
             UI.Label {
-                text = "[Tab] 切换视图  [Space] 求值  [Del] 删除",
+                text = "[Tab] 切换  [Space] 求值  [Del] 删除  [双击] 重命名",
                 fontSize = 11,
                 fontColor = { 120, 130, 160, 200 },
             },
@@ -396,6 +444,7 @@ function SwitchView(view)
         if btnBlocks then btnBlocks:SetVariant("outline") end
         if btnGraph then btnGraph:SetVariant("primary") end
     end
+    UpdateHint(nil)
 end
 
 -- ============================================================================
@@ -463,20 +512,204 @@ function ASTToBlock(ast)
 end
 
 -- ============================================================================
--- 逻辑：打包 → 节点图
+-- 逻辑：删除选中积木
 -- ============================================================================
 
-function PackageCurrentBlock()
-    if not blockCanvas_ then return end
+function DeleteSelected()
+    if currentView_ == "blocks" then
+        if not blockCanvas_ then return end
+        local sel = blockCanvas_:GetSelected()
+        if sel then
+            blockCanvas_:RemoveBlock(sel)
+            UpdateHint(nil)
+            print("[Lambda] 已删除积木: " .. (sel.name or sel.kind))
+        end
+    elseif currentView_ == "graph" then
+        if lambdaGraph_ and lambdaGraph_.selectedId_ then
+            lambdaGraph_:RemoveNode(lambdaGraph_.selectedId_)
+        end
+    end
+end
 
-    -- 获取选中积木的 AST
-    local ast = blockCanvas_:GetSelectedAST()
-    if not ast then
-        print("[Lambda] 请先选中一个积木树再打包")
+-- ============================================================================
+-- 逻辑：重命名（双击或按钮触发）
+-- ============================================================================
+
+function ShowRenameDialog()
+    if not blockCanvas_ then return end
+    local sel = blockCanvas_:GetSelected()
+    if sel then
+        ShowRenameDialogFor(sel)
+    end
+end
+
+function ShowRenameDialogFor(block)
+    if not block then return end
+
+    -- 只有变量和抽象（参数名）可以重命名
+    local currentName = ""
+    local isVar = (block.kind == "variable")
+    local isAbs = (block.kind == "abstraction")
+    if isVar then
+        currentName = block.name or ""
+    elseif isAbs then
+        currentName = block.param or ""
+    else
+        -- application 积木没有可重命名的字段
+        if hintLabel_ then
+            hintLabel_:SetText("应用积木无法重命名，请选中变量或抽象积木")
+        end
         return
     end
 
-    local name = "Node" .. math.random(100, 999)
+    local inputField = UI.TextField {
+        value = currentName,
+        placeholder = "输入新名称...",
+        maxLength = 20,
+        fontSize = 14,
+    }
+
+    local modal = UI.Modal {
+        title = isVar and "重命名变量" or "重命名参数",
+        size = "sm",
+        closeOnOverlay = true,
+        closeOnEscape = true,
+        onClose = function(self)
+            self:Destroy()
+        end,
+    }
+
+    modal:AddContent(UI.Panel {
+        flexDirection = "column",
+        gap = 8,
+        children = {
+            UI.Label {
+                text = isVar and "变量名:" or "参数名 (λ后面的名称):",
+                fontSize = 12,
+                fontColor = { 180, 190, 210, 220 },
+            },
+            inputField,
+        }
+    })
+
+    modal:SetFooter(UI.Panel {
+        flexDirection = "row",
+        justifyContent = "flex-end",
+        gap = 8,
+        children = {
+            UI.Button {
+                text = "取消",
+                size = "sm",
+                onClick = function() modal:Close() end,
+            },
+            UI.Button {
+                text = "确认",
+                variant = "primary",
+                size = "sm",
+                onClick = function()
+                    local newName = inputField:GetValue()
+                    if newName and #newName > 0 then
+                        if isVar then
+                            block.name = newName
+                        elseif isAbs then
+                            block.param = newName
+                        end
+                        -- 刷新布局
+                        if blockCanvas_ then
+                            blockCanvas_:_refreshAll()
+                        end
+                        print("[Lambda] 已重命名为: " .. newName)
+                    end
+                    modal:Close()
+                end,
+            },
+        }
+    })
+
+    modal:Open()
+end
+
+-- ============================================================================
+-- 逻辑：打包 → 节点图（带自定义名称对话框）
+-- ============================================================================
+
+function ShowPackageDialog()
+    if not blockCanvas_ then return end
+
+    local ast = blockCanvas_:GetSelectedAST()
+    if not ast then
+        if hintLabel_ then
+            hintLabel_:SetText("请先选中一个积木树再打包")
+        end
+        return
+    end
+
+    local inputField = UI.TextField {
+        value = "MyNode",
+        placeholder = "节点名称...",
+        maxLength = 30,
+        fontSize = 14,
+    }
+
+    local modal = UI.Modal {
+        title = "打包为节点",
+        size = "sm",
+        closeOnOverlay = true,
+        closeOnEscape = true,
+        onClose = function(self)
+            self:Destroy()
+        end,
+    }
+
+    modal:AddContent(UI.Panel {
+        flexDirection = "column",
+        gap = 8,
+        children = {
+            UI.Label {
+                text = "表达式: " .. AST.toString(ast),
+                fontSize = 12,
+                fontColor = { 160, 220, 180, 220 },
+                numberOfLines = 0,
+            },
+            UI.Label {
+                text = "节点名称:",
+                fontSize = 12,
+                fontColor = { 180, 190, 210, 220 },
+            },
+            inputField,
+        }
+    })
+
+    modal:SetFooter(UI.Panel {
+        flexDirection = "row",
+        justifyContent = "flex-end",
+        gap = 8,
+        children = {
+            UI.Button {
+                text = "取消",
+                size = "sm",
+                onClick = function() modal:Close() end,
+            },
+            UI.Button {
+                text = "打包",
+                variant = "primary",
+                size = "sm",
+                onClick = function()
+                    local name = inputField:GetValue()
+                    if not name or #name == 0 then
+                        name = "Node" .. math.random(100, 999)
+                    end
+                    PackageWithName(ast, name)
+                    modal:Close()
+                end,
+            },
+        }
+    })
+
+    modal:Open()
+end
+
+function PackageWithName(ast, name)
     local nodeDef = Packager.package(ast, name)
 
     -- 添加到节点图
@@ -488,6 +721,34 @@ function PackageCurrentBlock()
 
     -- 自动切到节点图视图
     SwitchView("graph")
+
+    if hintLabel_ then
+        hintLabel_:SetText("已打包 \"" .. name .. "\"  |  拖动端口连线组合节点")
+    end
+end
+
+-- ============================================================================
+-- 逻辑：提示更新
+-- ============================================================================
+
+function UpdateHint(block)
+    if not hintLabel_ then return end
+    if not block then
+        if currentView_ == "blocks" then
+            hintLabel_:SetText("点击左侧面板添加积木  |  拖拽积木到插槽中组合  |  双击变量重命名")
+        else
+            hintLabel_:SetText("从左侧面板添加预置节点  |  拖动端口创建连线  |  滚轮缩放")
+        end
+        return
+    end
+
+    if block.kind == "variable" then
+        hintLabel_:SetText("变量 \"" .. block.name .. "\"  |  双击重命名  |  Del 删除  |  拖入其他积木的插槽")
+    elseif block.kind == "abstraction" then
+        hintLabel_:SetText("λ" .. block.param .. "  |  双击修改参数名  |  拖积木到 body 插槽  |  Space 求值")
+    elseif block.kind == "application" then
+        hintLabel_:SetText("应用 (f x)  |  拖积木到 func/arg 插槽  |  Space 求值  |  打包为节点")
+    end
 end
 
 -- ============================================================================
@@ -631,12 +892,13 @@ function HandleKeyDown(eventType, eventData)
         else
             SwitchView("blocks")
         end
+        UpdateHint(nil)
     elseif key == KEY_SPACE then
         EvaluateCurrent()
     elseif key == KEY_DELETE or key == KEY_BACKSPACE then
-        -- 删除选中节点
-        if currentView_ == "graph" and lambdaGraph_ and lambdaGraph_.selectedId_ then
-            lambdaGraph_:RemoveNode(lambdaGraph_.selectedId_)
-        end
+        DeleteSelected()
+    elseif key == KEY_F2 then
+        -- F2 快捷键重命名
+        ShowRenameDialog()
     end
 end

@@ -44,9 +44,15 @@ function BlockCanvas:Init(props)
     self.time_ = 0
     self.snapAnims_ = {}    -- { block, fromX, fromY, toX, toY, elapsed, duration }
 
+    -- 双击检测
+    self.lastClickTime_ = 0
+    self.lastClickBlock_ = nil
+    self.DOUBLE_CLICK_TIME = 0.35
+
     -- 回调
     self.onBlockChanged_ = props.onBlockChanged   -- 积木树变化时
     self.onBlockSelected_ = props.onBlockSelected -- 选中积木时
+    self.onBlockDoubleClick_ = props.onBlockDoubleClick -- 双击积木时
 
     self.selectedBlock_ = nil
 
@@ -165,6 +171,21 @@ function BlockCanvas:OnPointerDown(event)
     if event.button == PointerEvent.Button.Left then
         local block = self:FindBlockAt(cx, cy)
         if block then
+            -- 双击检测
+            local now = self.time_ or 0
+            if self.lastClickBlock_ and self.lastClickBlock_.id == block.id
+                and (now - self.lastClickTime_) < self.DOUBLE_CLICK_TIME then
+                -- 触发双击
+                if self.onBlockDoubleClick_ then
+                    self.onBlockDoubleClick_(block)
+                end
+                self.lastClickBlock_ = nil
+                self.lastClickTime_ = 0
+                return true
+            end
+            self.lastClickTime_ = now
+            self.lastClickBlock_ = block
+
             self.selectedBlock_ = block
             if self.onBlockSelected_ then
                 self.onBlockSelected_(block)
