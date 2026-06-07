@@ -415,6 +415,31 @@ function CreateCampaignLevelUI(levelId)
         gap = 4,
     }
 
+    -- 浮动反馈 Toast (absolute 定位在画布底部居中)
+    feedbackLabel_ = UI.Label {
+        id = "feedback",
+        text = "",
+        fontSize = 13,
+        fontColor = { 255, 200, 100, 255 },
+        flexShrink = 1,
+    }
+    feedbackPanel_ = UI.Panel {
+        id = "feedbackPanel",
+        position = "absolute",
+        bottom = 16,
+        left = "15%",
+        right = "15%",
+        paddingTop = 8, paddingBottom = 8,
+        paddingLeft = 14, paddingRight = 14,
+        borderRadius = 8,
+        backgroundColor = { 30, 30, 40, 230 },
+        borderWidth = 1,
+        borderColor = { 80, 90, 130, 150 },
+        visible = false,
+        pointerEvents = "none",
+        children = { feedbackLabel_ },
+    }
+
     -- 关卡信息/教程/提交面板
     campaignHUD_ = CreateCampaignInfoPanel(level)
 
@@ -484,11 +509,15 @@ function CreateCampaignLevelUI(levelId)
                             },
                         }
                     },
-                    -- 中间: 积木画布
+                    -- 中间: 积木画布 + 浮动Toast
                     UI.Panel {
                         flex = 1,
                         height = "100%",
-                        children = { blockCanvas_ },
+                        children = {
+                            blockCanvas_,
+                            -- 浮动反馈Toast (absolute定位在画布底部居中)
+                            feedbackPanel_,
+                        },
                     },
                     -- 右侧: 关卡信息 + Inspector
                     UI.Panel {
@@ -545,24 +574,6 @@ function CreateCampaignInfoPanel(level)
         end
     end
 
-    -- 反馈面板
-    feedbackLabel_ = UI.Label {
-        id = "feedback",
-        text = "",
-        fontSize = 12,
-        fontColor = { 255, 200, 100, 255 },
-    }
-    feedbackPanel_ = UI.Panel {
-        id = "feedbackPanel",
-        width = "100%",
-        paddingTop = 6, paddingBottom = 6,
-        paddingLeft = 8, paddingRight = 8,
-        borderRadius = 6,
-        backgroundColor = { 40, 35, 20, 200 },
-        visible = false,
-        children = { feedbackLabel_ },
-    }
-
     return UI.Panel {
         width = "100%",
         flexDirection = "column",
@@ -596,12 +607,6 @@ function CreateCampaignInfoPanel(level)
                         children = tutorialChildren,
                     }
                 }
-            },
-            -- 反馈
-            UI.Panel {
-                width = "100%",
-                paddingLeft = 10, paddingRight = 10,
-                children = { feedbackPanel_ },
             },
             -- 按钮区
             UI.Panel {
@@ -1995,7 +2000,7 @@ function HandleKeyDown(eventType, eventData)
             EnterMainMenu()
         end
     elseif key == KEY_DELETE or key == KEY_BACKSPACE then
-        if not renameDialogOpen_ then
+        if not renameDialogOpen_ and not UI.GetFocus() then
             DeleteSelected()
         end
     elseif key == KEY_F2 then
