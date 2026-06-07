@@ -78,6 +78,8 @@ local breadcrumbLabel_ = nil
 -- 闯关模式 HUD 引用
 local campaignHUD_ = nil
 local victoryPopup_ = nil
+local feedbackPanel_ = nil
+local feedbackLabel_ = nil
 
 -- 对话框状态（防止键盘事件穿透）
 local renameDialogOpen_ = false
@@ -147,7 +149,7 @@ function SetupCampaignCallbacks()
             SubmitCampaignAnswer()
         end,
         onShowHint = function()
-            CampaignUI.showHint()
+            ShowCampaignHint()
         end,
         onShowLevelSelect = function()
             EnterCampaignSelect()
@@ -367,9 +369,10 @@ function CreateCampaignLevelUI(levelId)
                     if evalExprLabel_ then evalExprLabel_:SetText(evalExpr_) end
                 end
             end
+            UpdateCampaignInspector()
         end,
         onBlockSelected = function(block)
-            -- 在闯关模式下暂不需要 Inspector
+            UpdateCampaignInspector()
         end,
         onBlockDoubleClick = function(block)
             ShowRenameDialogFor(block)
@@ -404,8 +407,16 @@ function CreateCampaignLevelUI(levelId)
     }
     PopulateLeftPanelForCampaign(levelId)
 
-    -- HUD 覆盖层
-    campaignHUD_ = CampaignUI.createLevelHUD(levelId)
+    -- Inspector 内容容器 (关卡模式)
+    inspectorContent_ = UI.Panel {
+        id = "campaignInspectorContent",
+        width = "100%",
+        flexDirection = "column",
+        gap = 4,
+    }
+
+    -- 关卡信息/教程/提交面板
+    campaignHUD_ = CreateCampaignInfoPanel(level)
 
     -- 整体布局
     uiRoot_ = UI.Panel {
@@ -417,7 +428,7 @@ function CreateCampaignLevelUI(levelId)
             -- 顶部: 简化版 (只显示表达式)
             UI.Panel {
                 width = "100%",
-                height = 48,
+                height = 44,
                 flexDirection = "row",
                 alignItems = "center",
                 paddingLeft = 12,
@@ -427,17 +438,30 @@ function CreateCampaignLevelUI(levelId)
                 borderBottom = 1,
                 borderColor = { 50, 60, 90, 80 },
                 children = {
+                    UI.Button {
+                        text = "← 退出",
+                        variant = "ghost",
+                        size = "sm",
+                        fontColor = { 180, 140, 110, 220 },
+                        onClick = function()
+                            if CampaignUI then
+                                local cbs = CampaignUI._getCallbacks and CampaignUI._getCallbacks()
+                            end
+                            ExitCampaignLevel()
+                        end,
+                    },
+                    UI.Panel { width = 1, height = 28, backgroundColor = { 50, 60, 90, 80 } },
                     UI.Label {
-                        text = "λ 闯关",
-                        fontSize = 14,
+                        text = level.id .. " " .. level.title,
+                        fontSize = 13,
                         fontColor = { 140, 200, 255, 255 },
                     },
-                    UI.Panel { width = 1, height = 32, backgroundColor = { 50, 60, 90, 80 } },
+                    UI.Panel { flex = 1 },
                     UI.Label { text = "表达式:", fontSize = 11, fontColor = { 120, 130, 160, 180 } },
                     evalExprLabel_,
                 }
             },
-            -- 内容区
+            -- 内容区: 左 积木库 | 中 画布 | 右 教程+Inspector
             UI.Panel {
                 width = "100%",
                 flex = 1,
@@ -445,7 +469,7 @@ function CreateCampaignLevelUI(levelId)
                 children = {
                     -- 左侧: 受限积木库
                     UI.Panel {
-                        width = 170,
+                        width = 150,
                         height = "100%",
                         flexDirection = "column",
                         backgroundColor = { 22, 25, 38, 240 },
@@ -460,13 +484,39 @@ function CreateCampaignLevelUI(levelId)
                             },
                         }
                     },
-                    -- 中间: 积木画布 + HUD 叠加
+                    -- 中间: 积木画布
                     UI.Panel {
                         flex = 1,
                         height = "100%",
+                        children = { blockCanvas_ },
+                    },
+                    -- 右侧: 关卡信息 + Inspector
+                    UI.Panel {
+                        width = 240,
+                        height = "100%",
+                        flexDirection = "column",
+                        backgroundColor = { 18, 20, 32, 240 },
+                        borderLeft = 1,
+                        borderColor = { 50, 60, 90, 80 },
                         children = {
-                            blockCanvas_,
+                            -- 上半: 关卡信息/教程/按钮
                             campaignHUD_,
+                            -- 分隔
+                            UI.Panel { width = "90%", height = 1, alignSelf = "center", backgroundColor = { 60, 70, 110, 80 } },
+                            -- 下半: Inspector
+                            UI.Label {
+                                text = "属性",
+                                fontSize = 12,
+                                fontColor = { 160, 180, 220, 220 },
+                                paddingLeft = 10,
+                                paddingTop = 8,
+                                paddingBottom = 4,
+                            },
+                            UI.ScrollView {
+                                width = "100%",
+                                flex = 1,
+                                children = { inspectorContent_ },
+                            },
                         }
                     },
                 }
@@ -475,6 +525,263 @@ function CreateCampaignLevelUI(levelId)
     }
 
     UI.SetRoot(uiRoot_)
+    UpdateCampaignInspector()
+end
+
+-- ============================================================================
+-- 关卡信息/教程面板 (嵌入右侧栏上半部分)
+-- ============================================================================
+
+function CreateCampaignInfoPanel(level)
+    -- 教程内容
+    local tutorialChildren = {}
+    if level.tutorial and #level.tutorial > 0 then
+        for _, line in ipairs(level.tutorial) do
+            table.insert(tutorialChildren, UI.Label {
+                text = line,
+                fontSize = 11,
+                fontColor = { 190, 200, 220, 200 },
+            })
+        end
+    end
+
+    -- 反馈面板
+    feedbackLabel_ = UI.Label {
+        id = "feedback",
+        text = "",
+        fontSize = 12,
+        fontColor = { 255, 200, 100, 255 },
+    }
+    feedbackPanel_ = UI.Panel {
+        id = "feedbackPanel",
+        width = "100%",
+        paddingTop = 6, paddingBottom = 6,
+        paddingLeft = 8, paddingRight = 8,
+        borderRadius = 6,
+        backgroundColor = { 40, 35, 20, 200 },
+        visible = false,
+        children = { feedbackLabel_ },
+    }
+
+    return UI.Panel {
+        width = "100%",
+        flexDirection = "column",
+        flexShrink = 1,
+        children = {
+            -- 关卡描述
+            UI.Panel {
+                width = "100%",
+                paddingTop = 10, paddingBottom = 6,
+                paddingLeft = 10, paddingRight = 10,
+                children = {
+                    UI.Label {
+                        text = level.description,
+                        fontSize = 12,
+                        fontColor = { 200, 210, 230, 220 },
+                    },
+                },
+            },
+            -- 教程 (可滚动)
+            UI.ScrollView {
+                width = "100%",
+                flex = 1,
+                maxHeight = 200,
+                children = {
+                    UI.Panel {
+                        width = "100%",
+                        flexDirection = "column",
+                        gap = 2,
+                        paddingLeft = 10, paddingRight = 10,
+                        paddingBottom = 6,
+                        children = tutorialChildren,
+                    }
+                }
+            },
+            -- 反馈
+            UI.Panel {
+                width = "100%",
+                paddingLeft = 10, paddingRight = 10,
+                children = { feedbackPanel_ },
+            },
+            -- 按钮区
+            UI.Panel {
+                width = "100%",
+                flexDirection = "row",
+                gap = 6,
+                paddingLeft = 10, paddingRight = 10,
+                paddingTop = 6, paddingBottom = 10,
+                children = {
+                    UI.Button {
+                        text = "提交",
+                        variant = "success",
+                        size = "sm",
+                        flex = 1,
+                        onClick = function()
+                            SubmitCampaignAnswer()
+                        end,
+                    },
+                    UI.Button {
+                        text = "提示",
+                        variant = "outline",
+                        size = "sm",
+                        flex = 1,
+                        onClick = function()
+                            ShowCampaignHint()
+                        end,
+                    },
+                }
+            },
+        }
+    }
+end
+
+-- ============================================================================
+-- 关卡模式 Inspector (显示选中积木属性，支持 InputBox 改名)
+-- ============================================================================
+
+function UpdateCampaignInspector()
+    if not inspectorContent_ then return end
+    if appMode_ ~= "campaign_level" then return end
+    inspectorContent_:ClearChildren()
+
+    local sel = blockCanvas_ and blockCanvas_:GetSelected()
+    if sel then
+        -- 类型
+        local kindNames = { variable = "变量", abstraction = "抽象 λ", application = "应用" }
+        inspectorContent_:AddChild(UI.Label {
+            text = kindNames[sel.kind] or sel.kind,
+            fontSize = 12,
+            fontColor = { 140, 200, 255, 240 },
+            paddingLeft = 10, paddingTop = 4,
+        })
+
+        -- 属性编辑
+        if sel.kind == "variable" then
+            inspectorContent_:AddChild(UI.Panel {
+                width = "100%",
+                flexDirection = "column",
+                gap = 4,
+                paddingLeft = 10, paddingRight = 10, paddingTop = 6,
+                children = {
+                    UI.Label { text = "变量名", fontSize = 10, fontColor = { 130, 140, 170, 180 } },
+                    UI.TextField {
+                        value = sel.name or "",
+                        placeholder = "变量名",
+                        maxLength = 12,
+                        fontSize = 13,
+                        onChange = function(self, val)
+                            if val and #val > 0 then
+                                sel.name = val
+                                if blockCanvas_ then blockCanvas_:_refreshAll() end
+                            end
+                        end,
+                    },
+                },
+            })
+        elseif sel.kind == "abstraction" then
+            inspectorContent_:AddChild(UI.Panel {
+                width = "100%",
+                flexDirection = "column",
+                gap = 4,
+                paddingLeft = 10, paddingRight = 10, paddingTop = 6,
+                children = {
+                    UI.Label { text = "参数名 (λ 后面)", fontSize = 10, fontColor = { 130, 140, 170, 180 } },
+                    UI.TextField {
+                        value = sel.param or "",
+                        placeholder = "参数名",
+                        maxLength = 12,
+                        fontSize = 13,
+                        onChange = function(self, val)
+                            if val and #val > 0 then
+                                sel.param = val
+                                if blockCanvas_ then blockCanvas_:_refreshAll() end
+                            end
+                        end,
+                    },
+                },
+            })
+            local hasBody = sel.slots and sel.slots.body and sel.slots.body.child ~= nil
+            AddCampaignInspectorRow("body", hasBody and "已填充" or "空")
+        elseif sel.kind == "application" then
+            local hasFunc = sel.slots and sel.slots.func and sel.slots.func.child ~= nil
+            local hasArg = sel.slots and sel.slots.arg and sel.slots.arg.child ~= nil
+            AddCampaignInspectorRow("func", hasFunc and "已填充" or "空")
+            AddCampaignInspectorRow("arg", hasArg and "已填充" or "空")
+        end
+
+        -- 表达式预览
+        local ast = BlockDefs.toAST(sel)
+        if ast then
+            inspectorContent_:AddChild(UI.Panel {
+                width = "100%",
+                paddingLeft = 10, paddingRight = 10, paddingTop = 8,
+                flexDirection = "column",
+                gap = 2,
+                children = {
+                    UI.Label { text = "预览", fontSize = 10, fontColor = { 130, 140, 170, 180 } },
+                    UI.Label {
+                        text = AST.toString(ast),
+                        fontSize = 11,
+                        fontColor = { 160, 220, 180, 220 },
+                    },
+                },
+            })
+        end
+
+        -- 删除按钮
+        inspectorContent_:AddChild(UI.Button {
+            text = "删除",
+            variant = "danger",
+            size = "sm",
+            width = "90%",
+            alignSelf = "center",
+            marginTop = 10,
+            onClick = function()
+                if blockCanvas_ then
+                    blockCanvas_:RemoveBlock(sel)
+                    UpdateCampaignInspector()
+                end
+            end,
+        })
+    else
+        -- 未选中状态: 概览
+        local roots = blockCanvas_ and blockCanvas_:GetRootBlocks() or {}
+        inspectorContent_:AddChild(UI.Label {
+            text = "选中积木查看属性",
+            fontSize = 11,
+            fontColor = { 120, 130, 160, 160 },
+            paddingLeft = 10, paddingTop = 6,
+        })
+        if #roots > 0 then
+            inspectorContent_:AddChild(UI.Panel {
+                width = "100%",
+                paddingLeft = 10, paddingRight = 10, paddingTop = 8,
+                flexDirection = "column",
+                gap = 2,
+                children = {
+                    UI.Label { text = "当前表达式", fontSize = 10, fontColor = { 130, 140, 170, 180 } },
+                    UI.Label {
+                        text = evalExpr_ ~= "" and evalExpr_ or "?",
+                        fontSize = 11,
+                        fontColor = { 160, 220, 180, 200 },
+                    },
+                },
+            })
+        end
+    end
+end
+
+function AddCampaignInspectorRow(label, value)
+    inspectorContent_:AddChild(UI.Panel {
+        width = "100%",
+        flexDirection = "row",
+        justifyContent = "space-between",
+        paddingLeft = 10, paddingRight = 10, paddingTop = 3,
+        children = {
+            UI.Label { text = label, fontSize = 11, fontColor = { 130, 140, 170, 180 } },
+            UI.Label { text = value or "-", fontSize = 11, fontColor = { 200, 210, 230, 220 } },
+        }
+    })
 end
 
 --- 填充闯关模式左侧面板 (受限积木)
@@ -605,6 +912,35 @@ function AddPrefabBlock(prefabId)
 end
 
 -- ============================================================================
+-- 闯关辅助函数
+-- ============================================================================
+
+function ExitCampaignLevel()
+    CampaignManager.exitLevel()
+    EnterCampaignSelect()
+end
+
+function ShowCampaignHint()
+    local hint = CampaignManager.getHint()
+    if hint then
+        ShowCampaignFeedback(false, "提示: " .. hint)
+    end
+end
+
+function ShowCampaignFeedback(success, message)
+    if not feedbackPanel_ or not feedbackLabel_ then return end
+    feedbackLabel_:SetText(message)
+    if success then
+        feedbackLabel_:SetFontColor({ 100, 255, 150, 255 })
+        feedbackPanel_:SetBackgroundColor({ 20, 50, 30, 220 })
+    else
+        feedbackLabel_:SetFontColor({ 255, 150, 100, 255 })
+        feedbackPanel_:SetBackgroundColor({ 50, 30, 20, 220 })
+    end
+    feedbackPanel_:SetVisible(true)
+end
+
+-- ============================================================================
 -- 闯关提交答案
 -- ============================================================================
 
@@ -615,14 +951,14 @@ function SubmitCampaignAnswer()
     -- 从画布获取根积木 → 转 AST
     local roots = blockCanvas_:GetRootBlocks()
     if #roots == 0 then
-        CampaignUI.showFeedback(false, "画布为空！请构建一个 Lambda 表达式。")
+        ShowCampaignFeedback(false, "画布为空！请构建一个 Lambda 表达式。")
         return
     end
 
     -- 取第一个根积木作为答案
     local playerAST = BlockDefs.toAST(roots[1])
     if not playerAST then
-        CampaignUI.showFeedback(false, "无法解析积木为表达式，请检查是否有未连接的槽位。")
+        ShowCampaignFeedback(false, "无法解析积木为表达式，请检查是否有未连接的槽位。")
         return
     end
 
@@ -632,7 +968,7 @@ function SubmitCampaignAnswer()
     local pass, msg = CampaignManager.submitAnswer(playerAST)
 
     if pass then
-        CampaignUI.showFeedback(true, msg)
+        ShowCampaignFeedback(true, msg)
         -- 延迟显示胜利弹窗
         local level = CampaignManager.getCurrentLevel()
             or LevelData.getLevelById(CampaignManager.getCurrentLevelId() or "")
@@ -640,7 +976,7 @@ function SubmitCampaignAnswer()
             ShowVictoryPopup(level)
         end
     else
-        CampaignUI.showFeedback(false, msg)
+        ShowCampaignFeedback(false, msg)
     end
 end
 
