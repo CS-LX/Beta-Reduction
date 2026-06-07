@@ -674,12 +674,6 @@ function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
     nvgFillColor(nvg, nvgRGBA(255, 255, 255, 230))
     nvgText(nvg, x + 8, y + HH / 2, "\xce\xbb" .. block.param)
 
-    -- 左侧 C 形竖线（视觉强调）
-    nvgBeginPath(nvg)
-    nvgRect(nvg, x, y + HH, leftThick, h - HH)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 50))
-    nvgFill(nvg)
-
     -- body slot (空时画虚线框)
     local slot = block.slots.body
     if not slot.child then
