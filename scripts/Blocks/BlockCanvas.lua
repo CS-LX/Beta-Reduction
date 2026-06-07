@@ -648,43 +648,39 @@ function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
     local x, y, w, h = block.x, block.y, block.w, block.h
     local c = BlockDefs.Colors.abstraction
     local HH = BlockDefs.HEADER_H
-    local leftThick = 6
+    local leftThick = 10
     local rad = 8
 
-    -- 整体轮廓（只描边，不填充 body 区）
+    -- 整体 C 形路径（半透明底色 + 描边）
     nvgBeginPath(nvg)
     nvgRoundedRect(nvg, x, y, w, h, rad)
-    nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], isSelected and 240 or 120))
-    nvgStrokeWidth(nvg, isSelected and 2 or 1)
+    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 40))
+    nvgFill(nvg)
+    nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], isSelected and 240 or 140))
+    nvgStrokeWidth(nvg, isSelected and 2 or 1.2)
     nvgStroke(nvg)
 
     -- Header 区域
     nvgBeginPath(nvg)
     nvgRoundedRect(nvg, x, y, w, HH, rad)
     nvgRect(nvg, x, y + HH - rad, w, rad)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 70))
+    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 80))
     nvgFill(nvg)
 
     -- "λparam" 文字
     nvgFontFace(nvg, "sans")
-    nvgFontSize(nvg, 13)
+    nvgFontSize(nvg, 12)
     nvgTextAlign(nvg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 240))
+    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 230))
     nvgText(nvg, x + 8, y + HH / 2, "\xce\xbb" .. block.param)
 
-    -- 左侧色带（输入指示，用颜色代替文字）
+    -- 左侧 C 形竖线（视觉强调）
     nvgBeginPath(nvg)
-    nvgRoundedRect(nvg, x, y + HH, leftThick, h - HH, 0)
-    nvgFillColor(nvg, nvgRGBA(80, 200, 220, 60))
+    nvgRect(nvg, x, y + HH, leftThick, h - HH)
+    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 50))
     nvgFill(nvg)
 
-    -- 底部输出色带（用颜色代替文字）
-    nvgBeginPath(nvg)
-    nvgRoundedRect(nvg, x, y + h - 3, w, 3, 0)
-    nvgFillColor(nvg, nvgRGBA(100, 255, 180, 50))
-    nvgFill(nvg)
-
-    -- body slot
+    -- body slot (空时画虚线框)
     local slot = block.slots.body
     if not slot.child then
         local sx = x + (slot.rx or 0)
@@ -693,15 +689,15 @@ function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
         local sh = slot.rh or BlockDefs.SLOT_MIN_H
         nvgBeginPath(nvg)
         nvgRoundedRect(nvg, sx, sy, sw, sh, 4)
-        nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 15))
+        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 15))
         nvgFill(nvg)
-        nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], 40))
+        nvgStrokeColor(nvg, nvgRGBA(255, 255, 255, 40))
         nvgStrokeWidth(nvg, 1)
         nvgStroke(nvg)
-        -- 简洁占位文字
+        -- 占位文字
         nvgFontSize(nvg, 10)
         nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 60))
+        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 60))
         nvgText(nvg, sx + sw / 2, sy + sh / 2, "body")
     else
         self:_renderBlock(nvg, slot.child)
