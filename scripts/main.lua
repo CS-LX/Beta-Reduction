@@ -1,11 +1,15 @@
 -- ============================================================================
 -- Lambda 演算可视化编程沙盒 (Lambda Calculus Visual Programming Sandbox)
 -- ============================================================================
--- 系统总览：
---   1. 积木工作区（BlockCanvas）- Scratch-like 积木拼装
---   2. 节点图画布（LambdaGraph）- 节点连线组合
---   3. 求值面板 - 显示 β-归约过程
--- 视觉：Frutiger Aero + Arknights Glassmorphism
+-- Blender 风格布局:
+--   上方: 求值/归约面板
+--   左侧: 积木库/预置节点面板
+--   中间: 画布 (节点图 或 积木编辑)
+--   右侧: Inspector 属性面板
+--
+-- 两套独立视图:
+--   - 节点视图 (主视图): 节点连线组合
+--   - 积木视图 (编辑视图): 编辑某个节点内部表达式
 -- ============================================================================
 
 local UI = require("urhox-libs/UI")
@@ -24,11 +28,37 @@ local LambdaGraph = require("Graph.LambdaGraph")
 local uiRoot_ = nil
 local blockCanvas_ = nil
 local lambdaGraph_ = nil
-local currentView_ = "blocks"   -- "blocks" | "graph"
+
+-- 视图状态: "graph" (主视图) | "blocks" (积木编辑某个节点)
+local currentView_ = "graph"
+local editingNodeId_ = nil    -- 当前正在积木编辑的节点ID
+local editingNodeName_ = ""   -- 当前编辑的节点名称
+
+-- 求值状态
+local evalExpr_ = ""
 local evalResult_ = ""
 local evalTrace_ = {}
 local traceIndex_ = 0
-local hintLabel_ = nil          -- 底部提示文字
+
+-- Inspector 引用
+local inspectorPanel_ = nil
+local inspectorContent_ = nil
+
+-- 顶部面板引用
+local evalExprLabel_ = nil
+local evalResultLabel_ = nil
+local evalTraceList_ = nil
+
+-- 左侧面板引用
+local leftPanelTitle_ = nil
+local leftPanelContent_ = nil
+
+-- 中间画布容器
+local blockViewPanel_ = nil
+local graphViewPanel_ = nil
+
+-- 面包屑/视图指示
+local breadcrumbLabel_ = nil
 
 -- ============================================================================
 -- 生命周期
@@ -41,8 +71,8 @@ function Start()
     CreateUI()
     SubscribeToEvents()
 
-    -- 初始化默认积木
-    AddDefaultBlocks()
+    -- 初始化: 节点图里放几个预置
+    AddDefaultNodes()
 
     print("=== Lambda Sandbox Started ===")
 end
@@ -72,31 +102,37 @@ function SubscribeToEvents()
 end
 
 -- ============================================================================
--- UI 构建
+-- UI 构建 (Blender 风格)
 -- ============================================================================
 
 function CreateUI()
-    -- 积木画布
+    -- 积木画布 (用于编辑单个节点的内部表达式)
     blockCanvas_ = BlockCanvas {
         id = "blockCanvas",
         width = "100%",
         height = "100%",
         onBlockChanged = function()
+            -- 积木变化时更新 Inspector
             local sel = blockCanvas_ and blockCanvas_:GetSelected()
+            UpdateInspector()
+            -- 同时更新求值预览
             if sel then
                 local ast = BlockDefs.toAST(sel)
-                UpdateEvaluation(ast)
+                if ast then
+                    evalExpr_ = AST.toString(ast)
+                    if evalExprLabel_ then evalExprLabel_:SetText(evalExpr_) end
+                end
             end
         end,
         onBlockSelected = function(block)
-            UpdateHint(block)
+            UpdateInspector()
         end,
         onBlockDoubleClick = function(block)
             ShowRenameDialogFor(block)
         end,
     }
 
-    -- 节点图画布
+    -- 节点图画布 (主视图)
     lambdaGraph_ = LambdaGraph {
         id = "lambdaGraph",
         width = "100%",
@@ -107,17 +143,69 @@ function CreateUI()
             else
                 evalResult_ = "(无结果)"
             end
-            UpdateResultLabel()
+            if evalResultLabel_ then evalResultLabel_:SetText(evalResult_) end
+        end,
+        onSelectionChanged = function(node)
+            UpdateInspector()
+        end,
+        onNodeDoubleClick = function(nodeId)
+            EnterBlockEditor(nodeId)
         end,
     }
 
-    -- 底部提示栏
-    hintLabel_ = UI.Label {
-        id = "hintLabel",
-        text = "点击左侧面板添加积木  |  拖拽积木到插槽中组合  |  双击变量重命名",
-        fontSize = 11,
-        fontColor = { 150, 170, 200, 180 },
-        paddingLeft = 12,
+    -- 构建面板引用
+    evalExprLabel_ = UI.Label {
+        id = "evalExpr",
+        text = "等待输入...",
+        fontSize = 12,
+        fontColor = { 160, 220, 180, 220 },
+        numberOfLines = 2,
+        flex = 1,
+    }
+
+    evalResultLabel_ = UI.Label {
+        id = "evalResult",
+        text = "-",
+        fontSize = 13,
+        fontColor = { 255, 200, 100, 255 },
+        numberOfLines = 2,
+        flex = 1,
+    }
+
+    breadcrumbLabel_ = UI.Label {
+        id = "breadcrumb",
+        text = "节点图",
+        fontSize = 12,
+        fontColor = { 140, 200, 255, 255 },
+    }
+
+    -- 节点视图面板
+    graphViewPanel_ = UI.Panel {
+        id = "graphView",
+        width = "100%",
+        height = "100%",
+        position = "absolute",
+        top = 0, left = 0,
+        children = { lambdaGraph_ },
+    }
+
+    -- 积木视图面板
+    blockViewPanel_ = UI.Panel {
+        id = "blockView",
+        width = "100%",
+        height = "100%",
+        position = "absolute",
+        top = 0, left = 0,
+        visible = false,
+        children = { blockCanvas_ },
+    }
+
+    -- Inspector 内容容器
+    inspectorContent_ = UI.Panel {
+        id = "inspectorContent",
+        width = "100%",
+        flexDirection = "column",
+        gap = 6,
     }
 
     uiRoot_ = UI.Panel {
@@ -126,59 +214,19 @@ function CreateUI()
         height = "100%",
         flexDirection = "column",
         children = {
-            -- 顶部工具栏
-            CreateToolbar(),
-            -- 主内容区
+            -- 上方: 求值/归约面板
+            CreateTopPanel(),
+            -- 下方: 左 + 中 + 右
             UI.Panel {
-                id = "mainContent",
+                id = "mainArea",
                 width = "100%",
                 flex = 1,
                 flexDirection = "row",
                 children = {
-                    -- 左侧面板：积木面板/预置列表
-                    CreateSidePanel(),
-                    -- 中间：画布区域
-                    UI.Panel {
-                        id = "canvasArea",
-                        flex = 1,
-                        height = "100%",
-                        children = {
-                            -- 积木视图
-                            UI.Panel {
-                                id = "blockView",
-                                width = "100%",
-                                height = "100%",
-                                position = "absolute",
-                                top = 0, left = 0,
-                                children = { blockCanvas_ },
-                            },
-                            -- 节点图视图
-                            UI.Panel {
-                                id = "graphView",
-                                width = "100%",
-                                height = "100%",
-                                position = "absolute",
-                                top = 0, left = 0,
-                                visible = false,
-                                children = { lambdaGraph_ },
-                            },
-                        }
-                    },
-                    -- 右侧：求值面板
-                    CreateEvalPanel(),
+                    CreateLeftPanel(),
+                    CreateCenterPanel(),
+                    CreateRightPanel(),
                 }
-            },
-            -- 底部提示栏
-            UI.Panel {
-                id = "hintBar",
-                width = "100%",
-                height = 28,
-                flexDirection = "row",
-                alignItems = "center",
-                backgroundColor = { 20, 22, 32, 220 },
-                borderTop = 1,
-                borderColor = { 50, 60, 90, 60 },
-                children = { hintLabel_ },
             },
         }
     }
@@ -187,306 +235,748 @@ function CreateUI()
 end
 
 -- ============================================================================
--- 工具栏
+-- 上方: 求值/归约面板
 -- ============================================================================
 
-function CreateToolbar()
+function CreateTopPanel()
     return UI.Panel {
-        id = "toolbar",
+        id = "topPanel",
         width = "100%",
-        height = 48,
+        height = 72,
         flexDirection = "row",
         alignItems = "center",
-        paddingLeft = 16,
-        paddingRight = 16,
-        gap = 8,
-        backgroundColor = { 25, 28, 40, 240 },
+        paddingLeft = 12,
+        paddingRight = 12,
+        gap = 12,
+        backgroundColor = { 22, 25, 38, 245 },
         borderBottom = 1,
-        borderColor = { 60, 70, 100, 100 },
+        borderColor = { 50, 60, 90, 80 },
         children = {
-            -- 标题
-            UI.Label {
-                text = "λ Sandbox",
-                fontSize = 18,
-                fontColor = { 140, 200, 255, 255 },
+            -- 标题 + 视图指示
+            UI.Panel {
+                flexDirection = "column",
+                gap = 2,
+                children = {
+                    UI.Label {
+                        text = "λ Sandbox",
+                        fontSize = 16,
+                        fontColor = { 140, 200, 255, 255 },
+                    },
+                    breadcrumbLabel_,
+                }
             },
             -- 分隔
-            UI.Panel { width = 1, height = 24, backgroundColor = { 60, 70, 100, 100 } },
-            -- 视图切换按钮
-            UI.Button {
-                id = "btnBlocks",
-                text = "积木",
-                variant = "primary",
-                size = "sm",
-                onClick = function() SwitchView("blocks") end,
+            UI.Panel { width = 1, height = 44, backgroundColor = { 50, 60, 90, 80 } },
+            -- 表达式
+            UI.Panel {
+                flexDirection = "column",
+                flex = 1,
+                gap = 2,
+                children = {
+                    UI.Label { text = "表达式", fontSize = 10, fontColor = { 120, 130, 160, 180 } },
+                    evalExprLabel_,
+                }
             },
-            UI.Button {
-                id = "btnGraph",
-                text = "节点图",
-                variant = "outline",
-                size = "sm",
-                onClick = function() SwitchView("graph") end,
-            },
-            -- 分隔
-            UI.Panel { width = 1, height = 24, backgroundColor = { 60, 70, 100, 100 } },
             -- 操作按钮
             UI.Button {
-                id = "btnEval",
                 text = "求值",
                 variant = "success",
                 size = "sm",
                 onClick = function() EvaluateCurrent() end,
             },
             UI.Button {
-                id = "btnStep",
                 text = "单步",
                 variant = "outline",
                 size = "sm",
                 onClick = function() StepEval() end,
             },
-            UI.Button {
-                id = "btnPackage",
-                text = "打包为节点",
-                variant = "outline",
-                size = "sm",
-                onClick = function() ShowPackageDialog() end,
-            },
             -- 分隔
-            UI.Panel { width = 1, height = 24, backgroundColor = { 60, 70, 100, 100 } },
-            UI.Button {
-                id = "btnRename",
-                text = "重命名",
-                variant = "ghost",
-                size = "sm",
-                onClick = function() ShowRenameDialog() end,
-            },
-            UI.Button {
-                id = "btnDelete",
-                text = "删除",
-                variant = "danger",
-                size = "sm",
-                onClick = function() DeleteSelected() end,
-            },
-            -- 弹性空白
-            UI.Panel { flex = 1 },
-            -- 提示
-            UI.Label {
-                text = "[Tab] 切换  [Space] 求值  [Del] 删除  [双击] 重命名",
-                fontSize = 11,
-                fontColor = { 120, 130, 160, 200 },
+            UI.Panel { width = 1, height = 44, backgroundColor = { 50, 60, 90, 80 } },
+            -- 结果
+            UI.Panel {
+                flexDirection = "column",
+                width = 180,
+                gap = 2,
+                children = {
+                    UI.Label { text = "正规形式", fontSize = 10, fontColor = { 120, 130, 160, 180 } },
+                    evalResultLabel_,
+                }
             },
         }
     }
 end
 
 -- ============================================================================
--- 左侧积木/预置面板
+-- 左侧面板: 积木库 / 预置节点
 -- ============================================================================
 
-function CreateSidePanel()
+function CreateLeftPanel()
+    leftPanelTitle_ = UI.Label {
+        id = "leftTitle",
+        text = "节点库",
+        fontSize = 13,
+        fontColor = { 180, 190, 210, 255 },
+        paddingLeft = 12,
+        paddingTop = 10,
+        paddingBottom = 6,
+    }
+
+    leftPanelContent_ = UI.Panel {
+        id = "leftContent",
+        width = "100%",
+        flexDirection = "column",
+        flex = 1,
+    }
+
+    -- 初始填充节点视图的面板内容
+    PopulateLeftPanelForGraph()
+
     return UI.Panel {
-        id = "sidePanel",
-        width = 180,
+        id = "leftPanel",
+        width = 170,
         height = "100%",
         flexDirection = "column",
         backgroundColor = { 22, 25, 38, 240 },
         borderRight = 1,
         borderColor = { 50, 60, 90, 80 },
         children = {
-            UI.Label {
-                text = "积木库",
-                fontSize = 13,
-                fontColor = { 180, 190, 210, 255 },
-                paddingLeft = 12,
-                paddingTop = 12,
-                paddingBottom = 8,
+            leftPanelTitle_,
+            UI.ScrollView {
+                width = "100%",
+                flex = 1,
+                children = { leftPanelContent_ },
             },
-            -- 变量积木
-            CreatePaletteItem("变量 (x)", "var", { 80, 200, 220, 255 }),
-            CreatePaletteItem("抽象 (λx.M)", "abs", { 160, 100, 220, 255 }),
-            CreatePaletteItem("应用 (M N)", "app", { 80, 180, 120, 255 }),
-            -- 分隔线
-            UI.Panel {
-                width = "90%", height = 1,
-                marginTop = 8, marginBottom = 8,
-                alignSelf = "center",
-                backgroundColor = { 60, 70, 100, 60 },
-            },
-            UI.Label {
-                text = "预置组合子",
-                fontSize = 13,
-                fontColor = { 180, 190, 210, 255 },
-                paddingLeft = 12,
-                paddingBottom = 8,
-            },
-            CreatePaletteItem("I = λx.x", "preset_I", { 200, 140, 255, 255 }),
-            CreatePaletteItem("K = λx.λy.x", "preset_K", { 200, 140, 255, 255 }),
-            CreatePaletteItem("S = λx.λy.λz.xz(yz)", "preset_S", { 200, 140, 255, 255 }),
-            CreatePaletteItem("TRUE = λx.λy.x", "preset_TRUE", { 200, 140, 255, 255 }),
-            CreatePaletteItem("FALSE = λx.λy.y", "preset_FALSE", { 200, 140, 255, 255 }),
-            CreatePaletteItem("ZERO = λf.λx.x", "preset_ZERO", { 200, 140, 255, 255 }),
-            CreatePaletteItem("SUCC", "preset_SUCC", { 200, 140, 255, 255 }),
         }
     }
 end
 
-function CreatePaletteItem(label, kind, color)
-    return UI.Button {
-        text = label,
+function PopulateLeftPanelForGraph()
+    if not leftPanelContent_ then return end
+    leftPanelContent_:ClearChildren()
+    if leftPanelTitle_ then leftPanelTitle_:SetText("节点库") end
+
+    -- 预置组合子
+    local items = {
+        { label = "I = λx.x", kind = "I" },
+        { label = "K = λx.λy.x", kind = "K" },
+        { label = "S = λx.λy.λz.xz(yz)", kind = "S" },
+        { label = "TRUE = λt.λf.t", kind = "TRUE" },
+        { label = "FALSE = λt.λf.f", kind = "FALSE" },
+        { label = "ZERO = λf.λx.x", kind = "ZERO" },
+        { label = "SUCC", kind = "SUCC" },
+    }
+
+    leftPanelContent_:AddChild(UI.Label {
+        text = "预置组合子",
+        fontSize = 11,
+        fontColor = { 140, 150, 180, 180 },
+        paddingLeft = 12,
+        paddingBottom = 4,
+    })
+
+    for _, item in ipairs(items) do
+        leftPanelContent_:AddChild(UI.Button {
+            text = item.label,
+            variant = "ghost",
+            size = "sm",
+            width = "100%",
+            textAlign = "left",
+            fontColor = { 200, 140, 255, 255 },
+            onClick = function()
+                local rx = 100 + math.random(0, 300)
+                local ry = 80 + math.random(0, 200)
+                lambdaGraph_:AddPresetNode(item.kind, rx, ry)
+            end,
+        })
+    end
+
+    -- 分隔
+    leftPanelContent_:AddChild(UI.Panel {
+        width = "90%", height = 1,
+        marginTop = 8, marginBottom = 8,
+        alignSelf = "center",
+        backgroundColor = { 60, 70, 100, 60 },
+    })
+
+    leftPanelContent_:AddChild(UI.Label {
+        text = "操作",
+        fontSize = 11,
+        fontColor = { 140, 150, 180, 180 },
+        paddingLeft = 12,
+        paddingBottom = 4,
+    })
+
+    leftPanelContent_:AddChild(UI.Button {
+        text = "删除选中节点",
+        variant = "danger",
+        size = "sm",
+        width = "100%",
+        onClick = function() DeleteSelected() end,
+    })
+
+    leftPanelContent_:AddChild(UI.Button {
+        text = "求值选中节点",
+        variant = "success",
+        size = "sm",
+        width = "100%",
+        onClick = function() EvaluateCurrent() end,
+    })
+end
+
+function PopulateLeftPanelForBlocks()
+    if not leftPanelContent_ then return end
+    leftPanelContent_:ClearChildren()
+    if leftPanelTitle_ then leftPanelTitle_:SetText("积木库") end
+
+    -- 基础积木
+    leftPanelContent_:AddChild(UI.Label {
+        text = "基础积木",
+        fontSize = 11,
+        fontColor = { 140, 150, 180, 180 },
+        paddingLeft = 12,
+        paddingBottom = 4,
+    })
+
+    local basicItems = {
+        { label = "变量 (x)", kind = "var", color = { 80, 200, 220, 255 } },
+        { label = "抽象 (λx.M)", kind = "abs", color = { 160, 100, 220, 255 } },
+        { label = "应用 (M N)", kind = "app", color = { 80, 180, 120, 255 } },
+    }
+
+    for _, item in ipairs(basicItems) do
+        leftPanelContent_:AddChild(UI.Button {
+            text = item.label,
+            variant = "ghost",
+            size = "sm",
+            width = "100%",
+            textAlign = "left",
+            fontColor = item.color,
+            onClick = function()
+                AddBlockToCurrent(item.kind)
+            end,
+        })
+    end
+
+    -- 分隔
+    leftPanelContent_:AddChild(UI.Panel {
+        width = "90%", height = 1,
+        marginTop = 8, marginBottom = 8,
+        alignSelf = "center",
+        backgroundColor = { 60, 70, 100, 60 },
+    })
+
+    leftPanelContent_:AddChild(UI.Label {
+        text = "预置表达式",
+        fontSize = 11,
+        fontColor = { 140, 150, 180, 180 },
+        paddingLeft = 12,
+        paddingBottom = 4,
+    })
+
+    local presets = {
+        { label = "I = λx.x", kind = "preset_I" },
+        { label = "K = λx.λy.x", kind = "preset_K" },
+        { label = "S 组合子", kind = "preset_S" },
+    }
+    for _, item in ipairs(presets) do
+        leftPanelContent_:AddChild(UI.Button {
+            text = item.label,
+            variant = "ghost",
+            size = "sm",
+            width = "100%",
+            textAlign = "left",
+            fontColor = { 200, 140, 255, 255 },
+            onClick = function()
+                AddBlockToCurrent(item.kind)
+            end,
+        })
+    end
+
+    -- 分隔
+    leftPanelContent_:AddChild(UI.Panel {
+        width = "90%", height = 1,
+        marginTop = 8, marginBottom = 8,
+        alignSelf = "center",
+        backgroundColor = { 60, 70, 100, 60 },
+    })
+
+    leftPanelContent_:AddChild(UI.Label {
+        text = "操作",
+        fontSize = 11,
+        fontColor = { 140, 150, 180, 180 },
+        paddingLeft = 12,
+        paddingBottom = 4,
+    })
+
+    leftPanelContent_:AddChild(UI.Button {
+        text = "重命名选中",
         variant = "ghost",
         size = "sm",
         width = "100%",
-        textAlign = "left",
-        fontColor = color,
-        onClick = function()
-            OnPaletteClick(kind)
-        end,
+        onClick = function() ShowRenameDialog() end,
+    })
+
+    leftPanelContent_:AddChild(UI.Button {
+        text = "删除选中积木",
+        variant = "danger",
+        size = "sm",
+        width = "100%",
+        onClick = function() DeleteSelected() end,
+    })
+
+    leftPanelContent_:AddChild(UI.Panel {
+        width = "90%", height = 1,
+        marginTop = 8, marginBottom = 8,
+        alignSelf = "center",
+        backgroundColor = { 60, 70, 100, 60 },
+    })
+
+    leftPanelContent_:AddChild(UI.Button {
+        text = "← 返回节点图",
+        variant = "outline",
+        size = "sm",
+        width = "100%",
+        fontColor = { 255, 180, 80, 255 },
+        onClick = function() ExitBlockEditor() end,
+    })
+end
+
+-- ============================================================================
+-- 中间: 画布区域
+-- ============================================================================
+
+function CreateCenterPanel()
+    return UI.Panel {
+        id = "centerPanel",
+        flex = 1,
+        height = "100%",
+        children = {
+            graphViewPanel_,
+            blockViewPanel_,
+        }
     }
 end
 
 -- ============================================================================
--- 右侧求值面板
+-- 右侧: Inspector 面板
 -- ============================================================================
 
-function CreateEvalPanel()
+function CreateRightPanel()
     return UI.Panel {
-        id = "evalPanel",
-        width = 240,
+        id = "rightPanel",
+        width = 220,
         height = "100%",
         flexDirection = "column",
         backgroundColor = { 22, 25, 38, 240 },
         borderLeft = 1,
         borderColor = { 50, 60, 90, 80 },
-        padding = 12,
-        gap = 8,
         children = {
             UI.Label {
-                text = "求值结果",
-                fontSize = 14,
-                fontColor = { 180, 200, 240, 255 },
+                text = "Inspector",
+                fontSize = 13,
+                fontColor = { 180, 190, 210, 255 },
+                paddingLeft = 12,
+                paddingTop = 10,
+                paddingBottom = 6,
             },
-            UI.Panel {
-                width = "100%", height = 1,
-                backgroundColor = { 60, 70, 100, 60 },
-            },
-            -- 当前表达式
-            UI.Label {
-                id = "exprLabel",
-                text = "等待输入...",
-                fontSize = 12,
-                fontColor = { 160, 220, 180, 220 },
-                numberOfLines = 0,
-            },
-            -- 分隔
-            UI.Panel {
-                width = "100%", height = 1,
-                backgroundColor = { 60, 70, 100, 40 },
-            },
-            -- 归约步骤
-            UI.Label {
-                text = "β-归约步骤:",
-                fontSize = 11,
-                fontColor = { 140, 150, 180, 200 },
-            },
+            UI.Panel { width = "90%", height = 1, alignSelf = "center", backgroundColor = { 50, 60, 90, 60 } },
             UI.ScrollView {
-                id = "traceScroll",
                 width = "100%",
                 flex = 1,
-                children = {
-                    UI.Panel {
-                        id = "traceList",
-                        width = "100%",
-                        flexDirection = "column",
-                        gap = 4,
-                    }
-                }
-            },
-            -- 结果
-            UI.Panel {
-                width = "100%", height = 1,
-                backgroundColor = { 60, 70, 100, 60 },
-            },
-            UI.Label {
-                text = "正规形式:",
-                fontSize = 11,
-                fontColor = { 140, 150, 180, 200 },
-            },
-            UI.Label {
-                id = "resultLabel",
-                text = "-",
-                fontSize = 14,
-                fontColor = { 255, 200, 100, 255 },
-                numberOfLines = 0,
+                padding = 10,
+                children = { inspectorContent_ },
             },
         }
     }
 end
 
 -- ============================================================================
--- 逻辑：视图切换
+-- Inspector 更新逻辑
 -- ============================================================================
 
-function SwitchView(view)
-    currentView_ = view
-    local blockView = uiRoot_:FindById("blockView")
-    local graphView = uiRoot_:FindById("graphView")
-    local btnBlocks = uiRoot_:FindById("btnBlocks")
-    local btnGraph = uiRoot_:FindById("btnGraph")
+function UpdateInspector()
+    if not inspectorContent_ then return end
+    inspectorContent_:ClearChildren()
 
-    if view == "blocks" then
-        if blockView then blockView:SetVisible(true) end
-        if graphView then graphView:SetVisible(false) end
-        if btnBlocks then btnBlocks:SetVariant("primary") end
-        if btnGraph then btnGraph:SetVariant("outline") end
+    if currentView_ == "graph" then
+        UpdateInspectorForGraph()
     else
-        if blockView then blockView:SetVisible(false) end
-        if graphView then graphView:SetVisible(true) end
-        if btnBlocks then btnBlocks:SetVariant("outline") end
-        if btnGraph then btnGraph:SetVariant("primary") end
+        UpdateInspectorForBlocks()
     end
-    UpdateHint(nil)
+end
+
+function UpdateInspectorForGraph()
+    local selId = lambdaGraph_ and lambdaGraph_.selectedId_
+    if selId then
+        local node = lambdaGraph_.nodes_[selId]
+        if not node then return end
+
+        -- 节点名称
+        AddInspectorRow("名称", node.name)
+        AddInspectorRow("ID", node.id)
+        AddInspectorRow("预置", node.isPreset and "是" or "否")
+
+        -- 表达式
+        if node.nodeDef and node.nodeDef.displayExpr then
+            AddInspectorSection("表达式")
+            inspectorContent_:AddChild(UI.Label {
+                text = node.nodeDef.displayExpr,
+                fontSize = 11,
+                fontColor = { 160, 220, 180, 220 },
+                numberOfLines = 0,
+                paddingLeft = 4,
+            })
+        end
+
+        -- 输入端口
+        if #node.inputs > 0 then
+            AddInspectorSection("输入端口 (" .. #node.inputs .. ")")
+            for i, inp in ipairs(node.inputs) do
+                local status = inp.connectedFrom and "已连接" or "空"
+                local prefix = inp.origin == "bound_param" and "λ" or ""
+                AddInspectorRow("  " .. prefix .. inp.name, status)
+            end
+        end
+
+        -- 输出端口
+        if #node.outputs > 0 then
+            AddInspectorSection("输出端口 (" .. #node.outputs .. ")")
+            for i, outp in ipairs(node.outputs) do
+                local connCount = #outp.connections
+                AddInspectorRow("  " .. outp.name, connCount .. " 连接")
+            end
+        end
+
+        -- 操作按钮
+        AddInspectorSection("操作")
+        inspectorContent_:AddChild(UI.Button {
+            text = "编辑表达式",
+            variant = "primary",
+            size = "sm",
+            width = "100%",
+            onClick = function()
+                EnterBlockEditor(selId)
+            end,
+        })
+        inspectorContent_:AddChild(UI.Button {
+            text = "求值此节点",
+            variant = "success",
+            size = "sm",
+            width = "100%",
+            marginTop = 4,
+            onClick = function()
+                if lambdaGraph_ then
+                    lambdaGraph_:EvaluateNode(selId)
+                end
+            end,
+        })
+        inspectorContent_:AddChild(UI.Button {
+            text = "删除节点",
+            variant = "danger",
+            size = "sm",
+            width = "100%",
+            marginTop = 4,
+            onClick = function()
+                if lambdaGraph_ then
+                    lambdaGraph_:RemoveNode(selId)
+                    UpdateInspector()
+                end
+            end,
+        })
+    else
+        -- 未选中: 显示全局信息
+        AddInspectorSection("节点图概览")
+        local nodeCount = 0
+        for _ in pairs(lambdaGraph_.nodes_) do nodeCount = nodeCount + 1 end
+        AddInspectorRow("节点数", tostring(nodeCount))
+        AddInspectorRow("连线数", tostring(#lambdaGraph_.edges_))
+
+        AddInspectorSection("操作提示")
+        inspectorContent_:AddChild(UI.Label {
+            text = "• 左侧面板添加节点\n• 拖动端口创建连线\n• 双击节点编辑表达式\n• 右键/中键平移画布\n• 滚轮缩放",
+            fontSize = 11,
+            fontColor = { 140, 160, 190, 200 },
+            numberOfLines = 0,
+            paddingLeft = 4,
+        })
+    end
+end
+
+function UpdateInspectorForBlocks()
+    local sel = blockCanvas_ and blockCanvas_:GetSelected()
+    if sel then
+        -- 选中积木: 显示积木属性
+        AddInspectorRow("类型", sel.kind)
+        AddInspectorRow("ID", sel.id)
+
+        if sel.kind == "variable" then
+            AddInspectorRow("变量名", sel.name)
+            AddInspectorSection("操作")
+            inspectorContent_:AddChild(UI.Button {
+                text = "重命名",
+                variant = "primary",
+                size = "sm",
+                width = "100%",
+                onClick = function() ShowRenameDialogFor(sel) end,
+            })
+        elseif sel.kind == "abstraction" then
+            AddInspectorRow("参数", "λ" .. sel.param)
+            local hasBody = sel.slots.body.child ~= nil
+            AddInspectorRow("body", hasBody and "已填充" or "空")
+            AddInspectorSection("操作")
+            inspectorContent_:AddChild(UI.Button {
+                text = "重命名参数",
+                variant = "primary",
+                size = "sm",
+                width = "100%",
+                onClick = function() ShowRenameDialogFor(sel) end,
+            })
+        elseif sel.kind == "application" then
+            local hasFunc = sel.slots.func.child ~= nil
+            local hasArg = sel.slots.arg.child ~= nil
+            AddInspectorRow("func", hasFunc and "已填充" or "空")
+            AddInspectorRow("arg", hasArg and "已填充" or "空")
+        end
+
+        -- 通用: 当前 AST 预览
+        local ast = BlockDefs.toAST(sel)
+        if ast then
+            AddInspectorSection("预览")
+            inspectorContent_:AddChild(UI.Label {
+                text = AST.toString(ast),
+                fontSize = 11,
+                fontColor = { 160, 220, 180, 220 },
+                numberOfLines = 0,
+                paddingLeft = 4,
+            })
+        end
+
+        -- 通用删除
+        AddInspectorSection("")
+        inspectorContent_:AddChild(UI.Button {
+            text = "删除积木",
+            variant = "danger",
+            size = "sm",
+            width = "100%",
+            onClick = function()
+                if blockCanvas_ then
+                    blockCanvas_:RemoveBlock(sel)
+                    UpdateInspector()
+                end
+            end,
+        })
+    else
+        -- 未选中: 显示当前编辑节点的信息
+        AddInspectorSection("编辑中: " .. editingNodeName_)
+
+        -- 显示当前画布上的积木树的整体表达式
+        local roots = blockCanvas_ and blockCanvas_:GetRootBlocks() or {}
+        AddInspectorRow("根积木数", tostring(#roots))
+
+        if #roots > 0 then
+            AddInspectorSection("表达式预览")
+            for i, block in ipairs(roots) do
+                local ast = BlockDefs.toAST(block)
+                local txt = ast and AST.toString(ast) or "?"
+                if #txt > 30 then txt = txt:sub(1, 28) .. ".." end
+                inspectorContent_:AddChild(UI.Label {
+                    text = i .. ". " .. txt,
+                    fontSize = 11,
+                    fontColor = { 180, 200, 220, 200 },
+                    numberOfLines = 0,
+                    paddingLeft = 4,
+                    paddingBottom = 2,
+                })
+            end
+        end
+
+        AddInspectorSection("操作提示")
+        inspectorContent_:AddChild(UI.Label {
+            text = "• 左侧面板添加积木\n• 拖积木到插槽中组合\n• 双击变量重命名\n• Del 删除积木\n• Esc 返回节点图",
+            fontSize = 11,
+            fontColor = { 140, 160, 190, 200 },
+            numberOfLines = 0,
+            paddingLeft = 4,
+        })
+
+        -- 返回按钮
+        AddInspectorSection("")
+        inspectorContent_:AddChild(UI.Button {
+            text = "保存并返回节点图",
+            variant = "primary",
+            size = "sm",
+            width = "100%",
+            onClick = function() ExitBlockEditor() end,
+        })
+    end
+end
+
+-- Inspector 辅助
+function AddInspectorRow(label, value)
+    inspectorContent_:AddChild(UI.Panel {
+        width = "100%",
+        flexDirection = "row",
+        justifyContent = "space-between",
+        paddingLeft = 4,
+        paddingRight = 4,
+        paddingTop = 2,
+        paddingBottom = 2,
+        children = {
+            UI.Label { text = label, fontSize = 11, fontColor = { 140, 150, 180, 200 } },
+            UI.Label { text = value or "-", fontSize = 11, fontColor = { 200, 210, 230, 240 } },
+        }
+    })
+end
+
+function AddInspectorSection(title)
+    inspectorContent_:AddChild(UI.Panel {
+        width = "100%",
+        marginTop = 8,
+        marginBottom = 4,
+        flexDirection = "column",
+        children = {
+            UI.Label {
+                text = title,
+                fontSize = 11,
+                fontColor = { 160, 180, 220, 220 },
+                paddingLeft = 4,
+            },
+            UI.Panel { width = "100%", height = 1, backgroundColor = { 50, 60, 90, 50 }, marginTop = 2 },
+        }
+    })
 end
 
 -- ============================================================================
--- 逻辑：面板点击 → 添加积木/预置节点
+-- 视图切换: 进入积木编辑器
 -- ============================================================================
 
-function OnPaletteClick(kind)
-    if currentView_ == "blocks" then
-        -- 积木模式：在画布中添加积木
-        local block = nil
-        if kind == "var" then
-            block = BlockDefs.createVar("x")
-        elseif kind == "abs" then
-            block = BlockDefs.createAbs("x")
-        elseif kind == "app" then
-            block = BlockDefs.createApp()
-        elseif kind:sub(1, 7) == "preset_" then
-            local name = kind:sub(8)
-            local presetFn = AST.Presets[name]
-            if presetFn then
-                block = ASTToBlock(presetFn())
+function EnterBlockEditor(nodeId)
+    local node = lambdaGraph_.nodes_[nodeId]
+    if not node then return end
+
+    editingNodeId_ = nodeId
+    editingNodeName_ = node.name
+    currentView_ = "blocks"
+
+    -- 清空积木画布，加载节点的 AST
+    blockCanvas_:Clear()
+    if node.nodeDef and node.nodeDef.ast then
+        local block = ASTToBlock(node.nodeDef.ast)
+        if block then
+            blockCanvas_:AddBlock(block, 120, 80)
+        end
+    end
+
+    -- 切换面板可见性
+    if graphViewPanel_ then graphViewPanel_:SetVisible(false) end
+    if blockViewPanel_ then blockViewPanel_:SetVisible(true) end
+
+    -- 更新面包屑
+    if breadcrumbLabel_ then
+        breadcrumbLabel_:SetText("节点图 > " .. editingNodeName_ .. " [编辑中]")
+    end
+
+    -- 更新左侧面板
+    PopulateLeftPanelForBlocks()
+    UpdateInspector()
+
+    print("[Lambda] 进入积木编辑: " .. editingNodeName_)
+end
+
+-- ============================================================================
+-- 视图切换: 退出积木编辑器 → 回到节点图
+-- ============================================================================
+
+function ExitBlockEditor()
+    if currentView_ ~= "blocks" or not editingNodeId_ then
+        return
+    end
+
+    -- 从积木画布收集 AST (取第一个根积木)
+    local roots = blockCanvas_:GetRootBlocks()
+    local newAST = nil
+    if #roots > 0 then
+        newAST = BlockDefs.toAST(roots[1])
+    end
+
+    -- 更新节点定义
+    local node = lambdaGraph_.nodes_[editingNodeId_]
+    if node and newAST then
+        local newDef = Packager.package(newAST, node.name)
+        node.nodeDef = newDef
+        node.inputs = {}
+        node.outputs = {}
+        for i, port in ipairs(newDef.inputs or {}) do
+            node.inputs[i] = {
+                name = port.name,
+                origin = port.origin or "free_var",
+                connectedFrom = nil,
+            }
+        end
+        for i, port in ipairs(newDef.outputs or {}) do
+            node.outputs[i] = {
+                name = port.name,
+                connections = {},
+            }
+        end
+        -- 注意: 连线会因端口变化而失效，这里简单清除与该节点相关的连线
+        local newEdges = {}
+        for _, e in ipairs(lambdaGraph_.edges_) do
+            if e.fromNodeId ~= editingNodeId_ and e.toNodeId ~= editingNodeId_ then
+                newEdges[#newEdges + 1] = e
             end
         end
-        if block and blockCanvas_ then
-            -- 随机偏移避免完全重叠
-            local rx = 100 + math.random(0, 200)
-            local ry = 80 + math.random(0, 150)
-            blockCanvas_:AddBlock(block, rx, ry)
+        ---@diagnostic disable-next-line: assign-type-mismatch
+        lambdaGraph_.edges_ = newEdges
+        print("[Lambda] 已更新节点: " .. node.name .. " = " .. (newDef.displayExpr or "?"))
+    end
+
+    -- 切回节点图
+    currentView_ = "graph"
+    editingNodeId_ = nil
+    editingNodeName_ = ""
+
+    if graphViewPanel_ then graphViewPanel_:SetVisible(true) end
+    if blockViewPanel_ then blockViewPanel_:SetVisible(false) end
+
+    if breadcrumbLabel_ then
+        breadcrumbLabel_:SetText("节点图")
+    end
+
+    PopulateLeftPanelForGraph()
+    UpdateInspector()
+end
+
+-- ============================================================================
+-- 积木操作
+-- ============================================================================
+
+function AddBlockToCurrent(kind)
+    if not blockCanvas_ then return end
+    local block = nil
+    if kind == "var" then
+        block = BlockDefs.createVar("x")
+    elseif kind == "abs" then
+        block = BlockDefs.createAbs("x")
+    elseif kind == "app" then
+        block = BlockDefs.createApp()
+    elseif kind:sub(1, 7) == "preset_" then
+        local name = kind:sub(8)
+        local presetFn = AST.Presets[name]
+        if presetFn then
+            block = ASTToBlock(presetFn())
         end
-    else
-        -- 节点图模式：添加预置节点
-        if kind:sub(1, 7) == "preset_" then
-            local name = kind:sub(8)
-            local rx = 100 + math.random(0, 300)
-            local ry = 80 + math.random(0, 200)
-            lambdaGraph_:AddPresetNode(name, rx, ry)
-        end
+    end
+    if block then
+        local rx = 100 + math.random(0, 200)
+        local ry = 80 + math.random(0, 150)
+        blockCanvas_:AddBlock(block, rx, ry)
     end
 end
 
 --- AST → Block 树 (递归转换)
 function ASTToBlock(ast)
+    if ast == nil then return nil end
     if ast.kind == "variable" then
         return BlockDefs.createVar(ast.name)
     elseif ast.kind == "abstraction" then
@@ -512,55 +1002,43 @@ function ASTToBlock(ast)
 end
 
 -- ============================================================================
--- 逻辑：删除选中积木
+-- 删除选中
 -- ============================================================================
 
 function DeleteSelected()
-    if currentView_ == "blocks" then
-        if not blockCanvas_ then return end
-        local sel = blockCanvas_:GetSelected()
-        if sel then
-            blockCanvas_:RemoveBlock(sel)
-            UpdateHint(nil)
-            print("[Lambda] 已删除积木: " .. (sel.name or sel.kind))
-        end
-    elseif currentView_ == "graph" then
+    if currentView_ == "graph" then
         if lambdaGraph_ and lambdaGraph_.selectedId_ then
             lambdaGraph_:RemoveNode(lambdaGraph_.selectedId_)
+            UpdateInspector()
+        end
+    else
+        if blockCanvas_ then
+            local sel = blockCanvas_:GetSelected()
+            if sel then
+                blockCanvas_:RemoveBlock(sel)
+                UpdateInspector()
+            end
         end
     end
 end
 
 -- ============================================================================
--- 逻辑：重命名（双击或按钮触发）
+-- 重命名对话框
 -- ============================================================================
 
 function ShowRenameDialog()
-    if not blockCanvas_ then return end
+    if currentView_ ~= "blocks" or not blockCanvas_ then return end
     local sel = blockCanvas_:GetSelected()
-    if sel then
-        ShowRenameDialogFor(sel)
-    end
+    if sel then ShowRenameDialogFor(sel) end
 end
 
 function ShowRenameDialogFor(block)
     if not block then return end
-
-    -- 只有变量和抽象（参数名）可以重命名
-    local currentName = ""
     local isVar = (block.kind == "variable")
     local isAbs = (block.kind == "abstraction")
-    if isVar then
-        currentName = block.name or ""
-    elseif isAbs then
-        currentName = block.param or ""
-    else
-        -- application 积木没有可重命名的字段
-        if hintLabel_ then
-            hintLabel_:SetText("应用积木无法重命名，请选中变量或抽象积木")
-        end
-        return
-    end
+    if not isVar and not isAbs then return end
+
+    local currentName = isVar and (block.name or "") or (block.param or "")
 
     local inputField = UI.TextField {
         value = currentName,
@@ -574,9 +1052,7 @@ function ShowRenameDialogFor(block)
         size = "sm",
         closeOnOverlay = true,
         closeOnEscape = true,
-        onClose = function(self)
-            self:Destroy()
-        end,
+        onClose = function(self) self:Destroy() end,
     }
 
     modal:AddContent(UI.Panel {
@@ -609,16 +1085,10 @@ function ShowRenameDialogFor(block)
                 onClick = function()
                     local newName = inputField:GetValue()
                     if newName and #newName > 0 then
-                        if isVar then
-                            block.name = newName
-                        elseif isAbs then
-                            block.param = newName
-                        end
-                        -- 刷新布局
-                        if blockCanvas_ then
-                            blockCanvas_:_refreshAll()
-                        end
-                        print("[Lambda] 已重命名为: " .. newName)
+                        if isVar then block.name = newName
+                        else block.param = newName end
+                        if blockCanvas_ then blockCanvas_:_refreshAll() end
+                        UpdateInspector()
                     end
                     modal:Close()
                 end,
@@ -630,169 +1100,52 @@ function ShowRenameDialogFor(block)
 end
 
 -- ============================================================================
--- 逻辑：打包 → 节点图（带自定义名称对话框）
--- ============================================================================
-
-function ShowPackageDialog()
-    if not blockCanvas_ then return end
-
-    local ast = blockCanvas_:GetSelectedAST()
-    if not ast then
-        if hintLabel_ then
-            hintLabel_:SetText("请先选中一个积木树再打包")
-        end
-        return
-    end
-
-    local inputField = UI.TextField {
-        value = "MyNode",
-        placeholder = "节点名称...",
-        maxLength = 30,
-        fontSize = 14,
-    }
-
-    local modal = UI.Modal {
-        title = "打包为节点",
-        size = "sm",
-        closeOnOverlay = true,
-        closeOnEscape = true,
-        onClose = function(self)
-            self:Destroy()
-        end,
-    }
-
-    modal:AddContent(UI.Panel {
-        flexDirection = "column",
-        gap = 8,
-        children = {
-            UI.Label {
-                text = "表达式: " .. AST.toString(ast),
-                fontSize = 12,
-                fontColor = { 160, 220, 180, 220 },
-                numberOfLines = 0,
-            },
-            UI.Label {
-                text = "节点名称:",
-                fontSize = 12,
-                fontColor = { 180, 190, 210, 220 },
-            },
-            inputField,
-        }
-    })
-
-    modal:SetFooter(UI.Panel {
-        flexDirection = "row",
-        justifyContent = "flex-end",
-        gap = 8,
-        children = {
-            UI.Button {
-                text = "取消",
-                size = "sm",
-                onClick = function() modal:Close() end,
-            },
-            UI.Button {
-                text = "打包",
-                variant = "primary",
-                size = "sm",
-                onClick = function()
-                    local name = inputField:GetValue()
-                    if not name or #name == 0 then
-                        name = "Node" .. math.random(100, 999)
-                    end
-                    PackageWithName(ast, name)
-                    modal:Close()
-                end,
-            },
-        }
-    })
-
-    modal:Open()
-end
-
-function PackageWithName(ast, name)
-    local nodeDef = Packager.package(ast, name)
-
-    -- 添加到节点图
-    local rx = 100 + math.random(0, 300)
-    local ry = 80 + math.random(0, 200)
-    lambdaGraph_:AddNode(nodeDef, rx, ry)
-
-    print("[Lambda] 已打包为节点: " .. name .. " (" .. #nodeDef.inputs .. " 输入端口)")
-
-    -- 自动切到节点图视图
-    SwitchView("graph")
-
-    if hintLabel_ then
-        hintLabel_:SetText("已打包 \"" .. name .. "\"  |  拖动端口连线组合节点")
-    end
-end
-
--- ============================================================================
--- 逻辑：提示更新
--- ============================================================================
-
-function UpdateHint(block)
-    if not hintLabel_ then return end
-    if not block then
-        if currentView_ == "blocks" then
-            hintLabel_:SetText("点击左侧面板添加积木  |  拖拽积木到插槽中组合  |  双击变量重命名")
-        else
-            hintLabel_:SetText("从左侧面板添加预置节点  |  拖动端口创建连线  |  滚轮缩放")
-        end
-        return
-    end
-
-    if block.kind == "variable" then
-        hintLabel_:SetText("变量 \"" .. block.name .. "\"  |  双击重命名  |  Del 删除  |  拖入其他积木的插槽")
-    elseif block.kind == "abstraction" then
-        hintLabel_:SetText("λ" .. block.param .. "  |  双击修改参数名  |  拖积木到 body 插槽  |  Space 求值")
-    elseif block.kind == "application" then
-        hintLabel_:SetText("应用 (f x)  |  拖积木到 func/arg 插槽  |  Space 求值  |  打包为节点")
-    end
-end
-
--- ============================================================================
--- 逻辑：求值
+-- 求值逻辑
 -- ============================================================================
 
 function EvaluateCurrent()
-    if currentView_ == "blocks" then
-        -- 积木模式：对选中积木求值
+    if currentView_ == "graph" then
+        if lambdaGraph_ and lambdaGraph_.selectedId_ then
+            local result = lambdaGraph_:EvaluateNode(lambdaGraph_.selectedId_)
+            if result then
+                evalResult_ = AST.toString(result)
+                if evalResultLabel_ then evalResultLabel_:SetText(evalResult_) end
+            end
+            -- 更新表达式显示
+            local node = lambdaGraph_.nodes_[lambdaGraph_.selectedId_]
+            if node and node.nodeDef then
+                evalExpr_ = node.nodeDef.displayExpr or "?"
+                if evalExprLabel_ then evalExprLabel_:SetText(evalExpr_) end
+            end
+        end
+    else
+        -- 积木视图: 对选中积木树求值
         local ast = blockCanvas_ and blockCanvas_:GetSelectedAST()
         if not ast then
-            print("[Lambda] 请先选中一个积木")
-            return
+            -- 无选中 → 取第一个根积木
+            local roots = blockCanvas_:GetRootBlocks()
+            if #roots > 0 then
+                ast = BlockDefs.toAST(roots[1])
+            end
         end
-        RunEvaluation(ast)
-    else
-        -- 节点图模式：对选中节点求值
-        if lambdaGraph_ and lambdaGraph_.selectedId_ then
-            lambdaGraph_:EvaluateNode(lambdaGraph_.selectedId_)
+        if ast then
+            RunEvaluation(ast)
         end
     end
 end
 
 function RunEvaluation(ast)
-    -- 获取归约 trace
     evalTrace_ = Evaluator.trace(ast, 50)
     traceIndex_ = #evalTrace_
+    evalExpr_ = AST.toString(ast)
+    if evalExprLabel_ then evalExprLabel_:SetText(evalExpr_) end
 
-    -- 更新 UI
-    local exprLabel = uiRoot_:FindById("exprLabel")
-    if exprLabel then
-        exprLabel:SetText(AST.toString(ast))
-    end
-
-    -- 显示 trace
-    UpdateTraceDisplay()
-
-    -- 最终结果
     if #evalTrace_ > 0 then
         evalResult_ = AST.toString(evalTrace_[#evalTrace_])
     else
         evalResult_ = AST.toString(ast)
     end
-    UpdateResultLabel()
+    if evalResultLabel_ then evalResultLabel_:SetText(evalResult_) end
 end
 
 function StepEval()
@@ -802,71 +1155,27 @@ function StepEval()
     else
         traceIndex_ = math.min(traceIndex_ + 1, #evalTrace_)
     end
-    UpdateTraceDisplay()
-end
-
-function UpdateEvaluation(ast)
-    if ast then
-        local exprLabel = uiRoot_:FindById("exprLabel")
-        if exprLabel then
-            exprLabel:SetText(AST.toString(ast))
+    -- 更新显示
+    if traceIndex_ > 0 and traceIndex_ <= #evalTrace_ then
+        local stepAST = evalTrace_[traceIndex_]
+        if evalExprLabel_ then
+            evalExprLabel_:SetText("→ " .. AST.toString(stepAST))
         end
     end
 end
 
-function UpdateResultLabel()
-    local resultLabel = uiRoot_:FindById("resultLabel")
-    if resultLabel then
-        resultLabel:SetText(evalResult_)
-    end
-end
-
-function UpdateTraceDisplay()
-    local traceList = uiRoot_:FindById("traceList")
-    if not traceList then return end
-
-    -- 清除旧内容
-    traceList:ClearChildren()
-
-    -- 添加步骤
-    local showCount = math.min(traceIndex_, #evalTrace_)
-    for i = 1, showCount do
-        local stepText = "→ " .. AST.toString(evalTrace_[i])
-        local isLast = (i == showCount)
-        traceList:AddChild(UI.Label {
-            text = stepText,
-            fontSize = 11,
-            fontColor = isLast and { 255, 220, 100, 255 } or { 140, 160, 190, 200 },
-            numberOfLines = 0,
-        })
-    end
-end
-
 -- ============================================================================
--- 默认积木（启动时展示）
+-- 默认节点
 -- ============================================================================
 
-function AddDefaultBlocks()
-    if not blockCanvas_ then return end
-
-    -- 添加一个 Identity 组合子 I = λx.x
-    local iBlock = ASTToBlock(AST.Presets.I())
-    if iBlock then
-        blockCanvas_:AddBlock(iBlock, 80, 60)
-    end
-
-    -- 添加一个应用积木 (I y)
-    local appBlock = BlockDefs.createApp()
-    local iBlock2 = ASTToBlock(AST.Presets.I())
-    local yVar = BlockDefs.createVar("y")
-    if iBlock2 then BlockDefs.attach(iBlock2, appBlock, "func") end
-    BlockDefs.attach(yVar, appBlock, "arg")
-    blockCanvas_:AddBlock(appBlock, 80, 200)
-
-    -- 在节点图中放置几个预置节点
+function AddDefaultNodes()
+    if not lambdaGraph_ then return end
     lambdaGraph_:AddPresetNode("I", 80, 60)
     lambdaGraph_:AddPresetNode("K", 80, 200)
     lambdaGraph_:AddPresetNode("S", 300, 60)
+    lambdaGraph_:AddPresetNode("TRUE", 300, 200)
+
+    UpdateInspector()
 end
 
 -- ============================================================================
@@ -877,7 +1186,6 @@ end
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
-    -- UI 系统自动处理 canvas 的 Update 和 Render
 end
 
 ---@param eventType string
@@ -885,20 +1193,15 @@ end
 function HandleKeyDown(eventType, eventData)
     local key = eventData["Key"]:GetInt()
 
-    if key == KEY_TAB then
-        -- Tab 切换视图
+    if key == KEY_ESCAPE then
         if currentView_ == "blocks" then
-            SwitchView("graph")
-        else
-            SwitchView("blocks")
+            ExitBlockEditor()
         end
-        UpdateHint(nil)
-    elseif key == KEY_SPACE then
-        EvaluateCurrent()
     elseif key == KEY_DELETE or key == KEY_BACKSPACE then
         DeleteSelected()
     elseif key == KEY_F2 then
-        -- F2 快捷键重命名
         ShowRenameDialog()
+    elseif key == KEY_SPACE then
+        EvaluateCurrent()
     end
 end

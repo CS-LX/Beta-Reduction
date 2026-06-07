@@ -80,9 +80,15 @@ function LambdaGraph:Init(props)
     self.selectedId_ = nil
     self.hoveredId_ = nil
 
+    -- 双击检测
+    self.lastClickTime_ = 0
+    self.lastClickNodeId_ = nil
+    self.doubleClickThreshold_ = 0.35  -- 秒
+
     -- 回调
     self.onEvaluate_ = props.onEvaluate
     self.onSelectionChanged_ = props.onSelectionChanged
+    self.onNodeDoubleClick_ = props.onNodeDoubleClick
 
     Widget.Init(self, props)
 end
@@ -381,9 +387,23 @@ function LambdaGraph:OnPointerDown(event)
             return true
         end
 
-        -- 检测节点点击（开始拖拽）
+        -- 检测节点点击（开始拖拽 + 双击检测）
         local nodeId = self:HitNode(cx, cy)
         if nodeId then
+            -- 双击检测
+            local now = self.time_ or 0
+            if self.lastClickNodeId_ == nodeId and (now - self.lastClickTime_) < self.doubleClickThreshold_ then
+                -- 双击触发
+                self.lastClickNodeId_ = nil
+                self.lastClickTime_ = 0
+                if self.onNodeDoubleClick_ then
+                    self.onNodeDoubleClick_(nodeId)
+                end
+                return true
+            end
+            self.lastClickNodeId_ = nodeId
+            self.lastClickTime_ = now
+
             self.selectedId_ = nodeId
             self.isDragging_ = true
             self.dragNodeId_ = nodeId
