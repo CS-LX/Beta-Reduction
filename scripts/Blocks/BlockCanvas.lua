@@ -53,6 +53,12 @@ function BlockCanvas:Init(props)
     self.flowCallback_ = nil  -- 所有动画播完后的回调
     self.timedActions_ = {}   -- { delay, fired, fn } 定时动作（延迟触发回调）
 
+    -- 碎裂粒子动画
+    self.shatterAnims_ = {}   -- { particles[], elapsed, duration, alive }
+
+    -- 积木过渡动画
+    self.transition_ = nil  -- { oldBlocks, elapsed, duration }
+
     -- 双击检测
     self.lastClickTime_ = 0
     self.lastClickBlock_ = nil
@@ -113,8 +119,8 @@ function BlockCanvas:IsFrozen()
     return self.frozen_
 end
 
---- 添加数据流动画（胶囊方块从 from 飘到 to）
----@param text string 显示文本
+--- 添加飞行积木动画（真实积木从 from 飞到 to）
+---@param text string 显示文本（flyBlock 为 nil 时 fallback）
 ---@param fromX number 起始 X（画布坐标）
 ---@param fromY number 起始 Y
 ---@param toX number 目标 X
@@ -122,15 +128,22 @@ end
 ---@param duration number 持续时间（秒）
 ---@param color? number[] RGBA 颜色
 ---@param delay? number 延迟开始（秒）
-function BlockCanvas:AddFlowAnim(text, fromX, fromY, toX, toY, duration, color, delay)
+---@param flyBlock? table 真实 Block 对象，飞行时用 _renderBlock 渲染
+function BlockCanvas:AddFlowAnim(text, fromX, fromY, toX, toY, duration, color, delay, flyBlock)
+    -- 如果传入了 block，确保它已测量布局到 (0,0)
+    if flyBlock then
+        BlockDefs.measure(flyBlock)
+        BlockDefs.layout(flyBlock, 0, 0)
+    end
     table.insert(self.flowAnims_, {
         text = text,
         fromX = fromX, fromY = fromY,
         toX = toX, toY = toY,
-        elapsed = -(delay or 0),  -- 负值表示延迟等待
+        elapsed = -(delay or 0),
         duration = duration or 0.5,
         color = color or { 100, 220, 255 },
         alive = true,
+        flyBlock = flyBlock,  -- 真实积木对象
     })
 end
 
@@ -183,8 +196,8 @@ function BlockCanvas:AddSubstitutionLabel(x, y, text, duration, color, delay)
 end
 
 --- 添加内部数据流动画（值从源点沿连线流向目标变量积木）
---- 带粒子拖尾效果，展示数据在 lambda 内部的流动路径
----@param text string 显示文本（值）
+--- 带拖尾效果，展示数据在 lambda 内部的流动路径
+---@param text string 显示文本（flyBlock 为 nil 时 fallback）
 ---@param fromX number 起始 X
 ---@param fromY number 起始 Y
 ---@param toX number 目标 X
@@ -192,7 +205,12 @@ end
 ---@param duration number 持续时间
 ---@param color number[] 颜色
 ---@param delay number 延迟
-function BlockCanvas:AddInternalFlow(text, fromX, fromY, toX, toY, duration, color, delay)
+---@param flyBlock? table 真实 Block 对象
+function BlockCanvas:AddInternalFlow(text, fromX, fromY, toX, toY, duration, color, delay, flyBlock)
+    if flyBlock then
+        BlockDefs.measure(flyBlock)
+        BlockDefs.layout(flyBlock, 0, 0)
+    end
     table.insert(self.flowAnims_, {
         text = text,
         fromX = fromX, fromY = fromY,
@@ -201,7 +219,8 @@ function BlockCanvas:AddInternalFlow(text, fromX, fromY, toX, toY, duration, col
         duration = duration or 0.4,
         color = color or { 255, 200, 80 },
         alive = true,
-        isInternal = true,  -- 内部流动（带连线 + 拖尾）
+        isInternal = true,
+        flyBlock = flyBlock,
     })
 end
 
@@ -223,6 +242,67 @@ function BlockCanvas:AddVarReplace(block, newText, duration, color, delay)
     })
 end
 
+--- 添加碎裂粒子动画（λ壳消融效果）
+--- 在积木边缘生成 8~12 个三角碎片向外飞散
+---@param block table 目标积木（壳）
+---@param duration number 持续时间
+---@param delay number 延迟
+function BlockCanvas:AddShatterAnim(block, duration, delay)
+    local x, y, w, h = block.x, block.y, block.w, block.h
+    local numParticles = math.random(8, 12)
+    local particles = {}
+
+    -- 获取积木颜色
+    local cr, cg, cb = 140, 160, 200
+    if block.kind == "abstraction" and block.param then
+        cr, cg, cb = BlockDefs.getParamColor(block.param, 0.65, 0.5)
+    end
+
+    for i = 1, numParticles do
+        -- 沿边缘随机分布
+        local edge = math.random(1, 4) -- 上右下左
+        local px, py
+        if edge == 1 then
+            px = x + math.random() * w
+            py = y
+        elseif edge == 2 then
+            px = x + w
+            py = y + math.random() * h
+        elseif edge == 3 then
+            px = x + math.random() * w
+            py = y + h
+        else
+            px = x
+            py = y + math.random() * h
+        end
+
+        -- 向外的初速度
+        local cx, cy = x + w / 2, y + h / 2
+        local dx = px - cx
+        local dy = py - cy
+        local dist = math.sqrt(dx * dx + dy * dy)
+        if dist < 1 then dist = 1 end
+        local speed = 40 + math.random() * 60
+
+        table.insert(particles, {
+            x = px, y = py,
+            vx = (dx / dist) * speed + (math.random() - 0.5) * 30,
+            vy = (dy / dist) * speed + (math.random() - 0.5) * 30,
+            rot = math.random() * math.pi * 2,
+            rotSpeed = (math.random() - 0.5) * 12,
+            size = 4 + math.random() * 5,
+            r = cr, g = cg, b = cb,
+        })
+    end
+
+    table.insert(self.shatterAnims_, {
+        particles = particles,
+        elapsed = -(delay or 0),
+        duration = duration or 0.6,
+        alive = true,
+    })
+end
+
 --- 添加定时动作（在指定延迟后执行回调，可用于动画中途替换积木树等）
 ---@param delay number 延迟秒数（从添加时刻计）
 ---@param fn function 回调
@@ -239,6 +319,7 @@ end
 function BlockCanvas:ClearAnims()
     self.flowAnims_ = {}
     self.flashBlocks_ = {}
+    self.shatterAnims_ = {}
     self.timedActions_ = {}
     self.flowCallback_ = nil
 end
@@ -250,6 +331,9 @@ function BlockCanvas:HasActiveAnims()
     end
     for _, f in ipairs(self.flashBlocks_) do
         if f.alive then return true end
+    end
+    for _, s in ipairs(self.shatterAnims_) do
+        if s.alive then return true end
     end
     for _, t in ipairs(self.timedActions_) do
         if not t.fired then return true end
@@ -263,6 +347,38 @@ function BlockCanvas:ReplaceBlocks(newBlocks)
     self.blocks_ = newBlocks or {}
     self.selectedBlock_ = nil
     self.dragBlock_ = nil
+    self.transition_ = nil  -- 取消进行中的过渡
+end
+
+--- 带过渡动画地替换为新积木（淡出旧积木，淡入新积木）
+---@param newBlock table 新的根积木
+---@param x number 积木位置 X
+---@param y number 积木位置 Y
+---@param duration? number 过渡持续时间（默认 0.25s）
+function BlockCanvas:TransitionToBlock(newBlock, x, y, duration)
+    local oldBlocks = {}
+    for _, b in ipairs(self.blocks_) do
+        table.insert(oldBlocks, b)
+    end
+
+    -- 设置新积木
+    self.blocks_ = {}
+    self.selectedBlock_ = nil
+    self.dragBlock_ = nil
+    if newBlock then
+        newBlock.x = x or 100
+        newBlock.y = y or 100
+        BlockDefs.measure(newBlock)
+        BlockDefs.layout(newBlock, newBlock.x, newBlock.y)
+        table.insert(self.blocks_, newBlock)
+    end
+
+    -- 启动过渡动画
+    self.transition_ = {
+        oldBlocks = oldBlocks,
+        elapsed = 0,
+        duration = duration or 0.25,
+    }
 end
 
 --- 清空画布
@@ -489,6 +605,14 @@ end
 function BlockCanvas:Update(dt)
     self.time_ = (self.time_ or 0) + dt
 
+    -- 更新积木过渡动画
+    if self.transition_ then
+        self.transition_.elapsed = self.transition_.elapsed + dt
+        if self.transition_.elapsed >= self.transition_.duration then
+            self.transition_ = nil
+        end
+    end
+
     -- 更新数据流动画
     local anyAlive = false
     for _, a in ipairs(self.flowAnims_) do
@@ -512,6 +636,28 @@ function BlockCanvas:Update(dt)
             end
         end
     end
+    -- 更新碎裂粒子动画
+    for _, s in ipairs(self.shatterAnims_) do
+        if s.alive then
+            s.elapsed = s.elapsed + dt
+            if s.elapsed >= s.duration then
+                s.alive = false
+            elseif s.elapsed >= 0 then
+                -- 更新粒子位置
+                for _, p in ipairs(s.particles) do
+                    p.x = p.x + p.vx * dt
+                    p.y = p.y + p.vy * dt
+                    p.rot = p.rot + p.rotSpeed * dt
+                    -- 阻尼
+                    p.vx = p.vx * 0.96
+                    p.vy = p.vy * 0.96
+                end
+                anyAlive = true
+            else
+                anyAlive = true
+            end
+        end
+    end
     -- 更新定时动作
     for _, t in ipairs(self.timedActions_) do
         if not t.fired then
@@ -527,11 +673,12 @@ function BlockCanvas:Update(dt)
     -- 所有动画完成后触发回调
     if not anyAlive and self.flowCallback_ then
         -- 确认确实有过动画（非空列表）
-        if #self.flowAnims_ > 0 or #self.flashBlocks_ > 0 or #self.timedActions_ > 0 then
+        if #self.flowAnims_ > 0 or #self.flashBlocks_ > 0 or #self.shatterAnims_ > 0 or #self.timedActions_ > 0 then
             local cb = self.flowCallback_
             self.flowCallback_ = nil
             self.flowAnims_ = {}
             self.flashBlocks_ = {}
+            self.shatterAnims_ = {}
             self.timedActions_ = {}
             cb()
         end
@@ -567,9 +714,67 @@ function BlockCanvas:Render(nvg)
         self:_renderSnapPreview(nvg)
     end
 
-    -- 渲染所有积木
-    for _, block in ipairs(self.blocks_) do
-        self:_renderBlock(nvg, block)
+    -- 渲染过渡动画：土司弹出效果
+    -- 旧积木（土司机）：向下压缩消失
+    -- 新积木（土司）：从旧积木位置弹出（带 overshoot）
+    if self.transition_ then
+        local t = self.transition_.elapsed / self.transition_.duration
+
+        -- 阶段 1 (t=0~0.4): 旧积木压缩消失
+        local compressPhase = math.min(1.0, t / 0.4)
+        local compressEase = compressPhase * compressPhase  -- ease-in: 加速压缩
+        if compressEase < 0.99 then
+            local scaleY = 1.0 - compressEase * 0.85  -- 竖直压扁到 15%
+            local scaleX = 1.0 + compressEase * 0.08  -- 横向微膨胀
+            local fadeOut = 1.0 - compressEase
+            for _, block in ipairs(self.transition_.oldBlocks) do
+                nvgSave(nvg)
+                local cx = block.x + block.w / 2
+                local cy = block.y + block.h  -- 以底部为锚点压缩
+                nvgTranslate(nvg, cx, cy)
+                nvgScale(nvg, scaleX, scaleY)
+                nvgTranslate(nvg, -cx, -cy)
+                nvgGlobalAlpha(nvg, fadeOut)
+                self:_renderBlock(nvg, block)
+                nvgRestore(nvg)
+            end
+        end
+
+        -- 阶段 2 (t=0.3~1.0): 新积木从底部弹出（带 spring overshoot）
+        local popPhase = math.max(0, (t - 0.3) / 0.7)
+        if popPhase > 0 then
+            -- spring overshoot 缓动：弹出超过终点再回弹
+            local spring
+            if popPhase < 0.6 then
+                -- 弹出阶段：快速上升超过目标
+                local p = popPhase / 0.6
+                spring = p * (2 - p) * 1.12  -- overshoot to 112%
+            else
+                -- 回弹阶段：从 112% 回到 100%
+                local p = (popPhase - 0.6) / 0.4
+                spring = 1.12 - 0.12 * p  -- settle back
+            end
+            local offsetY = (1.0 - spring) * 30  -- 从下方 30px 弹出
+            local fadeIn = math.min(1.0, popPhase * 3)  -- 快速显现
+            local scaleUp = 0.85 + 0.15 * math.min(1.0, spring)
+
+            for _, block in ipairs(self.blocks_) do
+                nvgSave(nvg)
+                local cx = block.x + block.w / 2
+                local cy = block.y + block.h / 2
+                nvgTranslate(nvg, cx, cy + offsetY)
+                nvgScale(nvg, scaleUp, scaleUp)
+                nvgTranslate(nvg, -cx, -cy)
+                nvgGlobalAlpha(nvg, fadeIn)
+                self:_renderBlock(nvg, block)
+                nvgRestore(nvg)
+            end
+        end
+    else
+        -- 无过渡：正常渲染
+        for _, block in ipairs(self.blocks_) do
+            self:_renderBlock(nvg, block)
+        end
     end
 
     -- 渲染积木闪烁效果（支持整块 / 槽位级高亮 / 变量替换）
@@ -631,7 +836,7 @@ function BlockCanvas:Render(nvg)
         end
     end
 
-    -- 渲染数据流动画（飘动胶囊 + 替换标签）
+    -- 渲染数据流动画（飞行积木 + 替换标签）
     for _, a in ipairs(self.flowAnims_) do
         if a.alive and a.elapsed >= 0 then
             local t = a.elapsed / a.duration
@@ -649,42 +854,32 @@ function BlockCanvas:Render(nvg)
             end
 
             if a.isInternal then
-                -- 内部数据流：带虚线连接 + 小粒子头
-                -- 画连线路径（从 from 到当前位置）
-                local trailAlpha = math.floor(alpha * 0.4)
+                -- 内部数据流：直线连接 + 飞行真实积木
+                local trailAlpha = math.floor(alpha * 0.35)
                 nvgBeginPath(nvg)
                 nvgMoveTo(nvg, a.fromX, a.fromY)
-                -- 轻微弯曲路径
-                local midX = (a.fromX + cx) / 2
-                local midY = math.min(a.fromY, cy) - 12
-                nvgQuadTo(nvg, midX, midY, cx, cy)
+                nvgLineTo(nvg, cx, cy)
                 nvgStrokeColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], trailAlpha))
-                nvgStrokeWidth(nvg, 2)
+                nvgStrokeWidth(nvg, 1.5)
                 nvgStroke(nvg)
 
-                -- 流动头部小圆点 + 文字
-                local dotR = 10
-                nvgBeginPath(nvg)
-                nvgCircle(nvg, cx, cy, dotR)
-                nvgFillColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], math.floor(alpha * 0.7)))
-                nvgFill(nvg)
-                nvgStrokeColor(nvg, nvgRGBA(255, 255, 255, alpha))
-                nvgStrokeWidth(nvg, 1.2)
-                nvgStroke(nvg)
-                -- 文字
-                nvgFontFace(nvg, "sans")
-                nvgFontSize(nvg, 9)
-                nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-                nvgFillColor(nvg, nvgRGBA(255, 255, 255, alpha))
-                nvgText(nvg, cx, cy, a.text)
+                -- 飞行真实积木（缩小到 0.6 倍）
+                if a.flyBlock then
+                    local sc = 0.6
+                    nvgSave(nvg)
+                    nvgTranslate(nvg, cx - a.flyBlock.w * sc / 2, cy - a.flyBlock.h * sc / 2)
+                    nvgScale(nvg, sc, sc)
+                    nvgGlobalAlpha(nvg, alpha / 255)
+                    self:_renderBlock(nvg, a.flyBlock)
+                    nvgRestore(nvg)
+                end
 
             elseif a.isLabel then
-                -- 替换指示器：无弧线，大字体，带背景板
+                -- 替换指示器标签（保持原样）
                 local tw = math.max(50, #a.text * 7 + 20)
                 local th = 20
                 nvgSave(nvg)
                 nvgTranslate(nvg, cx, cy)
-                -- 背景圆角矩形
                 nvgBeginPath(nvg)
                 nvgRoundedRect(nvg, -tw / 2, -th / 2, tw, th, 4)
                 nvgFillColor(nvg, nvgRGBA(30, 30, 40, math.floor(alpha * 0.8)))
@@ -692,7 +887,6 @@ function BlockCanvas:Render(nvg)
                 nvgStrokeColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], alpha))
                 nvgStrokeWidth(nvg, 1)
                 nvgStroke(nvg)
-                -- 文字
                 nvgFontFace(nvg, "sans")
                 nvgFontSize(nvg, 12)
                 nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
@@ -700,41 +894,49 @@ function BlockCanvas:Render(nvg)
                 nvgText(nvg, 0, 0, a.text)
                 nvgRestore(nvg)
             else
-                -- 飘动胶囊：带弧形偏移
-                local arcOffset = math.sin(et * math.pi) * 20
-                cy = cy - arcOffset
+                -- 飞行真实积木：水平直线轨迹
+                if a.flyBlock then
+                    local sc = 1.0
+                    if t < 0.1 then sc = 0.5 + t / 0.1 * 0.5 end
+                    nvgSave(nvg)
+                    nvgTranslate(nvg, cx - a.flyBlock.w * sc / 2, cy - a.flyBlock.h * sc / 2)
+                    nvgScale(nvg, sc, sc)
+                    nvgGlobalAlpha(nvg, alpha / 255)
+                    self:_renderBlock(nvg, a.flyBlock)
+                    nvgRestore(nvg)
+                end
+            end
+        end
+    end
 
-                -- 缩放
-                local sc = 1.0
-                if t < 0.1 then sc = 0.5 + t / 0.1 * 0.5 end
-
-                -- 绘制胶囊
-                local tw = math.max(40, #a.text * 8 + 16)
-                local th = 22
-                nvgSave(nvg)
-                nvgTranslate(nvg, cx, cy)
-                nvgScale(nvg, sc, sc)
-                nvgBeginPath(nvg)
-                nvgRoundedRect(nvg, -tw / 2, -th / 2, tw, th, th / 2)
-                nvgFillColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], math.floor(alpha * 0.4)))
-                nvgFill(nvg)
-                nvgStrokeColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], alpha))
-                nvgStrokeWidth(nvg, 1.5)
-                nvgStroke(nvg)
-
-                -- 文字
-                nvgFontFace(nvg, "sans")
-                nvgFontSize(nvg, 11)
-                nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-                nvgFillColor(nvg, nvgRGBA(255, 255, 255, alpha))
-                nvgText(nvg, 0, 0, a.text)
-                nvgRestore(nvg)
+    -- 渲染碎裂粒子
+    for _, s in ipairs(self.shatterAnims_) do
+        if s.alive and s.elapsed >= 0 then
+            local t = s.elapsed / s.duration
+            local fadeAlpha = math.max(0, 1 - t * 2.5)  -- 快速衰减
+            for _, p in ipairs(s.particles) do
+                local alpha = math.floor(fadeAlpha * 200)
+                if alpha > 0 then
+                    nvgSave(nvg)
+                    nvgTranslate(nvg, p.x, p.y)
+                    nvgRotate(nvg, p.rot)
+                    -- 三角碎片
+                    local sz = p.size * (1 - t * 0.4)  -- 略微缩小
+                    nvgBeginPath(nvg)
+                    nvgMoveTo(nvg, 0, -sz)
+                    nvgLineTo(nvg, sz * 0.8, sz * 0.6)
+                    nvgLineTo(nvg, -sz * 0.8, sz * 0.6)
+                    nvgClosePath(nvg)
+                    nvgFillColor(nvg, nvgRGBA(p.r, p.g, p.b, alpha))
+                    nvgFill(nvg)
+                    nvgRestore(nvg)
+                end
             end
         end
     end
 
     -- 冻结遮罩
-    if self.frozen_ and #self.flowAnims_ == 0 and #self.flashBlocks_ == 0 then
+    if self.frozen_ and #self.flowAnims_ == 0 and #self.flashBlocks_ == 0 and #self.shatterAnims_ == 0 then
         -- 没有动画时轻微变暗提示冻结
         nvgBeginPath(nvg)
         nvgRect(nvg, -9999, -9999, 99999, 99999)
@@ -817,61 +1019,117 @@ function BlockCanvas:_renderBlock(nvg, block)
     end
 end
 
---- 变量积木: 胶囊体
+--- 变量积木: 圆角矩形 + 右侧三角凸起（颜色由绑定参数决定）
 function BlockCanvas:_renderVarBlock(nvg, block, isSelected)
     local x, y, w, h = block.x, block.y, block.w, block.h
-    local c = BlockDefs.Colors.variable
-    local r = h / 2  -- 圆角 = 高度一半 → 胶囊
+    local TW = BlockDefs.TOOTH_W   -- 三角凸起宽度
+    local bodyW = w - TW           -- 主体宽度（不含凸起）
+    local rad = 6
 
-    -- 玻璃背景
+    -- 获取绑定参数的颜色
+    local paramName = block.boundParam or block.name
+    local cr, cg, cb, ca = BlockDefs.getParamColor(paramName, 0.7, 0.55)
+
+    -- 主体路径（圆角矩形 + 右侧三角凸起）
+    -- 形状：左侧圆角矩形，右边中部伸出三角齿
+    local toothTip = x + w                    -- 凸起尖端 x
+    local toothTop = y + h / 2 - BlockDefs.TOOTH_H / 2  -- 凸起上缘
+    local toothBot = y + h / 2 + BlockDefs.TOOTH_H / 2  -- 凸起下缘
+
     nvgBeginPath(nvg)
-    nvgRoundedRect(nvg, x, y, w, h, r)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 60))
+    -- 从左上角开始，顺时针
+    nvgMoveTo(nvg, x + rad, y)
+    nvgLineTo(nvg, x + bodyW, y)                -- 顶边
+    nvgLineTo(nvg, x + bodyW, toothTop)         -- 右上到凸起上缘
+    nvgLineTo(nvg, toothTip, y + h / 2)         -- 凸起尖端
+    nvgLineTo(nvg, x + bodyW, toothBot)         -- 凸起下缘回主体
+    nvgLineTo(nvg, x + bodyW, y + h)            -- 右下
+    nvgLineTo(nvg, x + rad, y + h)              -- 底边
+    -- 左下圆角
+    nvgArcTo(nvg, x, y + h, x, y + h - rad, rad)
+    nvgLineTo(nvg, x, y + rad)
+    -- 左上圆角
+    nvgArcTo(nvg, x, y, x + rad, y, rad)
+    nvgClosePath(nvg)
+
+    -- 填充（参数色 + 半透明玻璃质感）
+    nvgFillColor(nvg, nvgRGBA(cr, cg, cb, 80))
     nvgFill(nvg)
 
-    -- 边框
-    nvgBeginPath(nvg)
-    nvgRoundedRect(nvg, x, y, w, h, r)
-    nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], isSelected and 255 or 160))
-    nvgStrokeWidth(nvg, isSelected and 2 or 1.2)
+    -- 描边
+    nvgStrokeColor(nvg, nvgRGBA(cr, cg, cb, isSelected and 255 or 180))
+    nvgStrokeWidth(nvg, isSelected and 2.0 or 1.3)
     nvgStroke(nvg)
 
-    -- 上高光 (glassmorphism)
+    -- 上高光条 (glassmorphism)
     nvgBeginPath(nvg)
-    nvgRoundedRect(nvg, x + 2, y + 1, w - 4, h * 0.4, r)
-    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 20))
+    nvgRoundedRect(nvg, x + 2, y + 1, bodyW - 4, h * 0.35, rad)
+    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 18))
     nvgFill(nvg)
 
-    -- 文字
+    -- 文字（变量名）
     nvgFontFace(nvg, "sans")
     nvgFontSize(nvg, 13)
     nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
     nvgFillColor(nvg, nvgRGBA(255, 255, 255, 240))
-    nvgText(nvg, x + w / 2, y + h / 2, block.name)
+    nvgText(nvg, x + bodyW / 2, y + h / 2, block.name)
 end
 
---- 抽象积木: C 形包裹容器 (函数/机器)
+--- 抽象积木: 管道机器（左侧三角凹槽入口 + 参数色header + 内部body）
 function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
     local x, y, w, h = block.x, block.y, block.w, block.h
-    local c = BlockDefs.Colors.abstraction
     local HH = BlockDefs.HEADER_H
-    local leftThick = 10
-    local rad = 8
+    local ND = BlockDefs.NOTCH_DEPTH  -- 凹槽深度
+    local rad = 7
 
-    -- 整体 C 形路径（半透明底色 + 描边）
+    -- 参数颜色
+    local cr, cg, cb = BlockDefs.getParamColor(block.param, 0.65, 0.5)
+
+    -- 整体管道外壳路径（含左侧三角凹槽）
+    -- 凹槽位于左边缘中部，形成入口
+    local notchTop = y + HH + (h - HH) * 0.3
+    local notchBot = y + HH + (h - HH) * 0.7
+    local notchMid = (notchTop + notchBot) / 2
+
     nvgBeginPath(nvg)
-    nvgRoundedRect(nvg, x, y, w, h, rad)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 40))
+    -- 从左上角开始，顺时针绘制
+    nvgMoveTo(nvg, x + rad, y)
+    nvgLineTo(nvg, x + w - rad, y)                    -- 顶边
+    nvgArcTo(nvg, x + w, y, x + w, y + rad, rad)     -- 右上圆角
+    nvgLineTo(nvg, x + w, y + h - rad)                -- 右边
+    nvgArcTo(nvg, x + w, y + h, x + w - rad, y + h, rad)  -- 右下圆角
+    nvgLineTo(nvg, x + rad, y + h)                    -- 底边
+    nvgArcTo(nvg, x, y + h, x, y + h - rad, rad)     -- 左下圆角
+    nvgLineTo(nvg, x, notchBot)                       -- 左边（凹槽下方）
+    -- 三角凹槽（向内凹）
+    nvgLineTo(nvg, x + ND, notchMid)                  -- 凹入尖端
+    nvgLineTo(nvg, x, notchTop)                       -- 凹槽上缘
+    nvgLineTo(nvg, x, y + rad)                        -- 左边（凹槽上方）
+    nvgArcTo(nvg, x, y, x + rad, y, rad)             -- 左上圆角
+    nvgClosePath(nvg)
+
+    -- 半透明底色填充
+    nvgFillColor(nvg, nvgRGBA(cr, cg, cb, 30))
     nvgFill(nvg)
-    nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], isSelected and 240 or 140))
+
+    -- 描边
+    nvgStrokeColor(nvg, nvgRGBA(cr, cg, cb, isSelected and 240 or 130))
     nvgStrokeWidth(nvg, isSelected and 2 or 1.2)
     nvgStroke(nvg)
 
-    -- Header 区域
+    -- Header 区域（参数色加深条带）
     nvgBeginPath(nvg)
-    nvgRoundedRect(nvg, x, y, w, HH, rad)
-    nvgRect(nvg, x, y + HH - rad, w, rad)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 80))
+    nvgRoundedRect(nvg, x + 1, y + 1, w - 2, HH - 1, rad - 1)
+    nvgFillColor(nvg, nvgRGBA(cr, cg, cb, 70))
+    nvgFill(nvg)
+
+    -- 凹槽内部高亮（引导视觉注意力）
+    nvgBeginPath(nvg)
+    nvgMoveTo(nvg, x, notchBot)
+    nvgLineTo(nvg, x + ND, notchMid)
+    nvgLineTo(nvg, x, notchTop)
+    nvgClosePath(nvg)
+    nvgFillColor(nvg, nvgRGBA(cr, cg, cb, 50))
     nvgFill(nvg)
 
     -- "λparam" 文字
@@ -881,7 +1139,7 @@ function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
     nvgFillColor(nvg, nvgRGBA(255, 255, 255, 230))
     nvgText(nvg, x + 8, y + HH / 2, "\xce\xbb" .. block.param)
 
-    -- body slot (空时画虚线框)
+    -- body slot
     local slot = block.slots.body
     if not slot.child then
         local sx = x + (slot.rx or 0)
@@ -890,58 +1148,71 @@ function BlockCanvas:_renderAbsBlock(nvg, block, isSelected)
         local sh = slot.rh or BlockDefs.SLOT_MIN_H
         nvgBeginPath(nvg)
         nvgRoundedRect(nvg, sx, sy, sw, sh, 4)
-        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 15))
+        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 12))
         nvgFill(nvg)
-        nvgStrokeColor(nvg, nvgRGBA(255, 255, 255, 40))
+        nvgStrokeColor(nvg, nvgRGBA(cr, cg, cb, 35))
         nvgStrokeWidth(nvg, 1)
         nvgStroke(nvg)
         -- 占位文字
         nvgFontSize(nvg, 10)
         nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 60))
+        nvgFillColor(nvg, nvgRGBA(255, 255, 255, 50))
         nvgText(nvg, sx + sw / 2, sy + sh / 2, "body")
     else
         self:_renderBlock(nvg, slot.child)
     end
 end
 
---- 应用积木: 双槽水平排列 (函数调用)
+--- 应用积木: 极淡背景 + 咬合齿形连接（函数调用/对接）
 function BlockCanvas:_renderAppBlock(nvg, block, isSelected)
     local x, y, w, h = block.x, block.y, block.w, block.h
-    local c = BlockDefs.Colors.application
     local rad = 6
+    local TH = BlockDefs.TOOTH_H
 
-    -- 背景
+    -- 极淡背景（仅区分层级，不画明显外壳）
     nvgBeginPath(nvg)
     nvgRoundedRect(nvg, x, y, w, h, rad)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 35))
-    nvgFill(nvg)
-    nvgStrokeColor(nvg, nvgRGBA(c[1], c[2], c[3], isSelected and 240 or 120))
-    nvgStrokeWidth(nvg, isSelected and 2 or 1)
-    nvgStroke(nvg)
-
-    -- 上高光
-    nvgBeginPath(nvg)
-    nvgRoundedRect(nvg, x + 1, y + 1, w - 2, h * 0.3, rad)
-    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 10))
+    nvgFillColor(nvg, nvgRGBA(255, 255, 255, isSelected and 20 or 10))
     nvgFill(nvg)
 
-    -- 中间连接三角（简洁的方向指示，替代文字箭头）
+    -- 选中时才画虚边框
+    if isSelected then
+        nvgStrokeColor(nvg, nvgRGBA(255, 255, 255, 60))
+        nvgStrokeWidth(nvg, 1)
+        nvgStroke(nvg)
+    end
+
+    -- 中间咬合齿形图标（func ⟶ arg 的对接指示）
     local funcSlot = block.slots.func
-    local midX = x + (funcSlot.rx or 0) + (funcSlot.rw or 56) + BlockDefs.GAP * 0.5
+    local argSlot = block.slots.arg
+    local funcRight = x + (funcSlot.rx or 0) + (funcSlot.rw or 56)
+    local argLeft = x + (argSlot.rx or 0)
+    local midX = (funcRight + argLeft) / 2
     local midY = y + h / 2
+
+    -- 绘制咬合齿形：左半凹 + 右半凸
     nvgBeginPath(nvg)
-    nvgMoveTo(nvg, midX + 2, midY - 4)
-    nvgLineTo(nvg, midX + 8, midY)
-    nvgLineTo(nvg, midX + 2, midY + 4)
+    -- 左凹（func 侧出口）
+    nvgMoveTo(nvg, midX - 4, midY - TH / 2)
+    nvgLineTo(nvg, midX, midY)
+    nvgLineTo(nvg, midX - 4, midY + TH / 2)
     nvgClosePath(nvg)
-    nvgFillColor(nvg, nvgRGBA(c[1], c[2], c[3], 100))
+    nvgFillColor(nvg, nvgRGBA(180, 200, 220, 50))
+    nvgFill(nvg)
+
+    nvgBeginPath(nvg)
+    -- 右凸（arg 侧入口）
+    nvgMoveTo(nvg, midX + 4, midY - TH / 2)
+    nvgLineTo(nvg, midX, midY)
+    nvgLineTo(nvg, midX + 4, midY + TH / 2)
+    nvgClosePath(nvg)
+    nvgFillColor(nvg, nvgRGBA(180, 200, 220, 50))
     nvgFill(nvg)
 
     -- func slot (左侧)
-    self:_renderSlot(nvg, block, "func", "f", {c[1], c[2], c[3]})
+    self:_renderSlot(nvg, block, "func", "\xce\xbb", {140, 100, 240})
     -- arg slot (右侧)
-    self:_renderSlot(nvg, block, "arg", "x", {c[1], c[2], c[3]})
+    self:_renderSlot(nvg, block, "arg", "x", {80, 200, 220})
 end
 
 function BlockCanvas:_renderSlot(nvg, block, slotKey, placeholder, hintColor)

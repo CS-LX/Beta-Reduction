@@ -44,21 +44,32 @@ local renameDialogOpen_ = false
 -- ============================================================================
 
 --- AST → Block 树 (递归转换)
-function ASTToBlock(ast)
+--- @param ast table AST 节点
+--- @param scope table|nil 当前作用域栈（param名 → 最近绑定的λ参数名）
+function ASTToBlock(ast, scope)
     if ast == nil then return nil end
+    scope = scope or {}
+
     if ast.kind == "variable" then
-        return BlockDefs.createVar(ast.name)
+        local block = BlockDefs.createVar(ast.name)
+        -- 查找该变量绑定的参数名（用于颜色映射）
+        block.boundParam = scope[ast.name] or ast.name
+        return block
     elseif ast.kind == "abstraction" then
         local block = BlockDefs.createAbs(ast.param)
-        local bodyBlock = ASTToBlock(ast.body)
+        -- 构建新作用域：当前参数名绑定到自身
+        local childScope = {}
+        for k, v in pairs(scope) do childScope[k] = v end
+        childScope[ast.param] = ast.param
+        local bodyBlock = ASTToBlock(ast.body, childScope)
         if bodyBlock then
             BlockDefs.attach(bodyBlock, block, "body")
         end
         return block
     elseif ast.kind == "application" then
         local block = BlockDefs.createApp()
-        local funcBlock = ASTToBlock(ast.func)
-        local argBlock = ASTToBlock(ast.arg)
+        local funcBlock = ASTToBlock(ast.func, scope)
+        local argBlock = ASTToBlock(ast.arg, scope)
         if funcBlock then
             BlockDefs.attach(funcBlock, block, "func")
         end

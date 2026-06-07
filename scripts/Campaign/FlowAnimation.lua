@@ -88,40 +88,48 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
     blockCanvas:SetFrozen(true)
     blockCanvas:ClearAnims()
 
-    -- 时序常量
-    local FLY_IN_DUR = 0.4
-    local FLY_OUT_DUR = 0.4
-    local SLOT_HL_DUR = 0.3
-    local INTERNAL_DUR = 0.25
-    local REPLACE_DUR = 0.35
-    local SUBST_DUR = 0.5
-    local STEP_GAP = 0.3
-    local TEST_GAP = 0.5
+    -- 时序常量（整体偏慢，便于观察）
+    local FLY_IN_DUR = 0.7
+    local FLY_OUT_DUR = 0.7
+    local SLOT_HL_DUR = 0.5
+    local INTERNAL_DUR = 0.45
+    local REPLACE_DUR = 0.5
+    local SUBST_DUR = 0.7
+    local STEP_GAP = 0.45
+    local TEST_GAP = 0.6
 
     -- 保存原始积木位置
     local origX, origY = rootBlock.x, rootBlock.y
 
     ---------------------------------------------------------------------------
     -- 模式 A 辅助：在 lambda 积木上展示"喂入一个值"的动画
+    -- 三阶段：吞入凹槽 → 替换涌出 → 壳消融
     ---------------------------------------------------------------------------
     local function animateFeedInput(lambdaBlock, inputStr, delay)
         local dur = 0.0
 
-        -- 1) 输入值从右侧飞入 lambda 积木
-        local targetX = lambdaBlock.x + lambdaBlock.w / 2
-        local targetY = lambdaBlock.y + (BlockDefs.HEADER_H or 26) / 2
-        local startX = lambdaBlock.x + lambdaBlock.w + 60
-        local startY = targetY
+        -- 构建真实积木对象用于飞行动画
+        local inputAST = Verifier.Parser.parse(inputStr)
+        local inputBlock = inputAST and ASTToBlock(inputAST) or nil
+
+        -- 阶段1: 吞入 — 外部输入从左侧滑入 λ 凹槽
+        local SWALLOW_DUR = 0.7
+        local notchX = lambdaBlock.x + BlockDefs.NOTCH_DEPTH / 2
+        local notchY = lambdaBlock.y + (BlockDefs.HEADER_H or 26) + (lambdaBlock.h - (BlockDefs.HEADER_H or 26)) * 0.5
+        local startX = lambdaBlock.x - 80
+        local startY = notchY
         blockCanvas:AddFlowAnim(
             inputStr, startX, startY,
-            targetX, targetY,
-            FLY_IN_DUR, { 100, 220, 255 }, delay + dur
+            notchX, notchY,
+            SWALLOW_DUR, { 100, 220, 255 }, delay + dur,
+            inputBlock
         )
-        dur = dur + FLY_IN_DUR * 0.7
+        -- 高亮 λ 凹槽
+        blockCanvas:AddFlashBlock(lambdaBlock, SWALLOW_DUR, { 200, 140, 255 }, delay + dur)
+        dur = dur + SWALLOW_DUR * 0.8
 
-        -- 2) Lambda header 高亮 + 替换标签
-        blockCanvas:AddFlashBlock(lambdaBlock, 0.4, { 200, 140, 255 }, delay + dur)
-        local labelText = lambdaBlock.param .. " → " .. inputStr
+        -- 显示替换标签
+        local labelText = lambdaBlock.param .. " \xe2\x86\x92 " .. inputStr
         local labelX = lambdaBlock.x + lambdaBlock.w / 2
         local labelY = lambdaBlock.y - 4
         blockCanvas:AddSubstitutionLabel(
@@ -130,31 +138,34 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
         )
         dur = dur + 0.35
 
-        -- 3) 值从 header 流向 body 内所有匹配变量
-        local flowStartX = lambdaBlock.x + lambdaBlock.w / 2
-        local flowStartY = lambdaBlock.y + (BlockDefs.HEADER_H or 26)
+        -- 阶段2: 替换涌出 — body 内变量逐个膨胀为 arg 副本
+        local EMERGE_DUR = 0.5
         local bodyBlock = lambdaBlock.slots.body and lambdaBlock.slots.body.child
         if bodyBlock then
             local varBlocks = collectVarBlocks(bodyBlock, lambdaBlock.param, {})
             for vi, vb in ipairs(varBlocks) do
                 local varCX = vb.x + vb.w / 2
                 local varCY = vb.y + vb.h / 2
-                local viDelay = delay + dur + (vi - 1) * (INTERNAL_DUR + 0.05)
+                local viDelay = delay + dur + (vi - 1) * (EMERGE_DUR + 0.05)
+                blockCanvas:AddVarReplace(
+                    vb, inputStr, EMERGE_DUR,
+                    { 255, 180, 80 }, viDelay
+                )
+                -- 从凹槽方向流入指示
+                local flowFromX = lambdaBlock.x + BlockDefs.NOTCH_DEPTH
+                local flowFromY = notchY
                 blockCanvas:AddInternalFlow(
                     inputStr,
-                    flowStartX, flowStartY,
+                    flowFromX, flowFromY,
                     varCX, varCY,
-                    INTERNAL_DUR,
+                    EMERGE_DUR * 0.7,
                     { 255, 180, 80 },
-                    viDelay
-                )
-                blockCanvas:AddVarReplace(
-                    vb, inputStr, REPLACE_DUR,
-                    { 255, 180, 80 }, viDelay + INTERNAL_DUR
+                    viDelay,
+                    inputBlock
                 )
             end
             if #varBlocks > 0 then
-                dur = dur + (#varBlocks) * (INTERNAL_DUR + 0.05) + REPLACE_DUR * 0.6
+                dur = dur + (#varBlocks) * (EMERGE_DUR + 0.05) + EMERGE_DUR * 0.3
             else
                 blockCanvas:AddFlashBlock(bodyBlock, 0.25, { 180, 220, 160 }, delay + dur)
                 dur = dur + 0.25
@@ -163,11 +174,17 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
             dur = dur + 0.2
         end
 
+        -- 阶段3: 壳消融 — λ 外壳碎裂蒸发
+        local SHATTER_DUR = 0.6
+        blockCanvas:AddShatterAnim(lambdaBlock, SHATTER_DUR, delay + dur)
+        dur = dur + SHATTER_DUR
+
         return dur
     end
 
     ---------------------------------------------------------------------------
     -- 模式 B 辅助：在画布积木上做一步 β-归约动画
+    -- 四阶段：对接高亮 → 吞入 → 替换涌出 → 壳消融
     ---------------------------------------------------------------------------
     local function animateOneReduction(delay)
         local roots = blockCanvas:GetRootBlocks()
@@ -182,56 +199,76 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
 
         local dur = 0.0
 
-        -- 1) 高亮 redex application 积木
-        blockCanvas:AddFlashBlock(appBlock, 0.35, { 80, 160, 255 }, delay + dur)
-        dur = dur + 0.25
-
-        -- 2) 高亮 arg 积木
+        -- 阶段1: 对接高亮 — 整个 application 闪烁，arg 颜色加深
+        blockCanvas:AddFlashBlock(appBlock, 0.5, { 80, 160, 255 }, delay + dur)
         local argStr = "?"
+        local argFlyBlock = nil
         if argBlock then
             local argAST = BlockDefs.toAST(argBlock)
             argStr = argAST and AST.toString(argAST) or argBlock.name or "?"
-            blockCanvas:AddSlotHighlight(appBlock, "arg", SLOT_HL_DUR, { 100, 200, 255 }, delay + dur)
-            blockCanvas:AddFlashBlock(argBlock, SLOT_HL_DUR, { 100, 220, 180 }, delay + dur)
-            dur = dur + SLOT_HL_DUR * 0.6
+            argFlyBlock = argAST and ASTToBlock(argAST) or nil
+            blockCanvas:AddFlashBlock(argBlock, 0.5, { 100, 220, 180 }, delay + dur)
         end
+        dur = dur + 0.5
 
-        -- 3) Lambda header + 替换标签
-        blockCanvas:AddFlashBlock(lambdaBlock, 0.4, { 200, 140, 255 }, delay + dur)
-        local labelText = lambdaBlock.param .. " → " .. argStr
+        -- 阶段2: 吞入 — arg 滑向 λ 入口凹槽，缩小消失
+        local SWALLOW_DUR = 0.7
+        if argBlock and argFlyBlock then
+            local argCX = argBlock.x + argBlock.w / 2
+            local argCY = argBlock.y + argBlock.h / 2
+            -- 目标: λ 左侧凹槽入口中心
+            local notchX = lambdaBlock.x + BlockDefs.NOTCH_DEPTH / 2
+            local notchY = lambdaBlock.y + (BlockDefs.HEADER_H or 26) + (lambdaBlock.h - (BlockDefs.HEADER_H or 26)) * 0.5
+            blockCanvas:AddFlowAnim(
+                argStr, argCX, argCY,
+                notchX, notchY,
+                SWALLOW_DUR, { 100, 220, 255 }, delay + dur,
+                argFlyBlock
+            )
+            -- 同时高亮 λ 凹槽区域
+            blockCanvas:AddFlashBlock(lambdaBlock, SWALLOW_DUR, { 200, 140, 255 }, delay + dur)
+        end
+        dur = dur + SWALLOW_DUR + 0.1
+
+        -- 显示替换标签 "x → arg"
+        local labelText = lambdaBlock.param .. " \xe2\x86\x92 " .. argStr
         local labelX = lambdaBlock.x + lambdaBlock.w / 2
-        local labelY = lambdaBlock.y - 4
+        local labelY = lambdaBlock.y - 8
         blockCanvas:AddSubstitutionLabel(
             labelX, labelY, labelText,
             SUBST_DUR, { 255, 200, 80 }, delay + dur
         )
         dur = dur + 0.35
 
-        -- 4) 值流向 body 内变量
-        local flowStartX = lambdaBlock.x + lambdaBlock.w / 2
-        local flowStartY = lambdaBlock.y + (BlockDefs.HEADER_H or 26)
+        -- 阶段3: 替换涌出 — body 内同色变量逐个膨胀变形为 arg 副本
+        local EMERGE_DUR = 0.5
         local bodyBlock = lambdaBlock.slots.body and lambdaBlock.slots.body.child
         if bodyBlock then
             local varBlocks = collectVarBlocks(bodyBlock, lambdaBlock.param, {})
             for vi, vb in ipairs(varBlocks) do
                 local varCX = vb.x + vb.w / 2
                 local varCY = vb.y + vb.h / 2
-                local viDelay = delay + dur + (vi - 1) * (INTERNAL_DUR + 0.05)
+                local viDelay = delay + dur + (vi - 1) * (EMERGE_DUR + 0.05)
+                -- 变量积木膨胀替换效果
+                blockCanvas:AddVarReplace(
+                    vb, argStr, EMERGE_DUR,
+                    { 255, 180, 80 }, viDelay
+                )
+                -- 同时从凹槽方向发出微小流动指示
+                local flowFromX = lambdaBlock.x + BlockDefs.NOTCH_DEPTH
+                local flowFromY = lambdaBlock.y + (BlockDefs.HEADER_H or 26) + (lambdaBlock.h - (BlockDefs.HEADER_H or 26)) * 0.5
                 blockCanvas:AddInternalFlow(
                     argStr,
-                    flowStartX, flowStartY,
+                    flowFromX, flowFromY,
                     varCX, varCY,
-                    INTERNAL_DUR,
+                    EMERGE_DUR * 0.7,
                     { 255, 180, 80 },
-                    viDelay
-                )
-                blockCanvas:AddVarReplace(
-                    vb, argStr, REPLACE_DUR,
-                    { 255, 180, 80 }, viDelay + INTERNAL_DUR
+                    viDelay,
+                    argFlyBlock
                 )
             end
             if #varBlocks > 0 then
-                dur = dur + (#varBlocks) * (INTERNAL_DUR + 0.05) + REPLACE_DUR * 0.6
+                dur = dur + (#varBlocks) * (EMERGE_DUR + 0.05) + EMERGE_DUR * 0.3
             else
                 blockCanvas:AddFlashBlock(bodyBlock, 0.25, { 180, 220, 160 }, delay + dur)
                 dur = dur + 0.25
@@ -239,6 +276,11 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
         else
             dur = dur + 0.2
         end
+
+        -- 阶段4: 壳消融 — λ 外壳碎裂成粒子蒸发
+        local SHATTER_DUR = 0.6
+        blockCanvas:AddShatterAnim(lambdaBlock, SHATTER_DUR, delay + dur)
+        dur = dur + SHATTER_DUR
 
         return dur
     end
@@ -292,13 +334,15 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
             local function flyOutResult()
                 local roots = blockCanvas:GetRootBlocks()
                 local outBlock = roots[1]
-                local outX = outBlock and (outBlock.x + outBlock.w / 2) or (origX + 50)
+                local outX = outBlock and (outBlock.x + outBlock.w) or (origX + 50)
                 local outY = outBlock and (outBlock.y + outBlock.h / 2) or (origY + 20)
                 local outColor = match and { 100, 255, 160 } or { 255, 100, 100 }
+                local resultFlyBlock = resultAST and ASTToBlock(resultAST) or nil
                 blockCanvas:AddFlowAnim(
                     resultStr, outX, outY,
-                    outX + 80, outY - 20,
-                    FLY_OUT_DUR, outColor, 0.1
+                    outX + 100, outY,
+                    FLY_OUT_DUR, outColor, 0.1,
+                    resultFlyBlock
                 )
                 blockCanvas:AddTimedAction(FLY_OUT_DUR + TEST_GAP, function()
                     runTestCase(tcIdx + 1, onAllDone)
@@ -321,8 +365,7 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                                 local nextAST = trace[sIdx + 1]
                                 local nextBlock = ASTToBlock(nextAST)
                                 if nextBlock then
-                                    blockCanvas:ReplaceBlocks({})
-                                    blockCanvas:AddBlock(nextBlock, origX, origY)
+                                    blockCanvas:TransitionToBlock(nextBlock, origX, origY)
                                 end
                                 runInternalStep(sIdx + 1)
                             end)
@@ -348,8 +391,7 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                         end
                         local newBlock = ASTToBlock(currentAST)
                         if newBlock then
-                            blockCanvas:ReplaceBlocks({})
-                            blockCanvas:AddBlock(newBlock, origX, origY)
+                            blockCanvas:TransitionToBlock(newBlock, origX, origY)
                         end
                         feedInput(inputIdx + 1)
                     end)
@@ -376,8 +418,7 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                         blockCanvas:AddTimedAction(stepDur + STEP_GAP, function()
                             local nextBlock = ASTToBlock(trace[sIdx + 1])
                             if nextBlock then
-                                blockCanvas:ReplaceBlocks({})
-                                blockCanvas:AddBlock(nextBlock, origX, origY)
+                                blockCanvas:TransitionToBlock(nextBlock, origX, origY)
                             end
                             runFallbackStep(sIdx + 1)
                         end)
@@ -407,18 +448,19 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                 if stepIdx > numSteps then
                     local finalBlock = ASTToBlock(resultAST)
                     if finalBlock then
-                        blockCanvas:ReplaceBlocks({})
-                        blockCanvas:AddBlock(finalBlock, origX, origY)
+                        blockCanvas:TransitionToBlock(finalBlock, origX, origY)
                     end
                     local roots = blockCanvas:GetRootBlocks()
                     local outBlock = roots[1]
                     local outX = outBlock and (outBlock.x + outBlock.w / 2) or (origX + 50)
                     local outY = outBlock and (outBlock.y + outBlock.h / 2) or (origY + 20)
                     local outColor = match and { 100, 255, 160 } or { 255, 100, 100 }
+                    local outFlyBlock = resultAST and ASTToBlock(resultAST) or nil
                     blockCanvas:AddFlowAnim(
                         resultStr, outX, outY,
-                        outX + 80, outY - 20,
-                        FLY_OUT_DUR, outColor, 0.1
+                        outX + 100, outY,
+                        FLY_OUT_DUR, outColor, 0.1,
+                        outFlyBlock
                     )
                     blockCanvas:AddTimedAction(FLY_OUT_DUR + TEST_GAP, function()
                         runTestCase(tcIdx + 1, onAllDone)
@@ -430,8 +472,7 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                 blockCanvas:AddTimedAction(stepDur + STEP_GAP, function()
                     local nextBlock = ASTToBlock(trace[stepIdx + 1])
                     if nextBlock then
-                        blockCanvas:ReplaceBlocks({})
-                        blockCanvas:AddBlock(nextBlock, origX, origY)
+                        blockCanvas:TransitionToBlock(nextBlock, origX, origY)
                     end
                     runStep(stepIdx + 1)
                 end)
@@ -445,8 +486,7 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
 
     -- 启动链式测试用例执行
     runTestCase(1, function()
-        blockCanvas:ReplaceBlocks({})
-        blockCanvas:AddBlock(rootBlock, origX, origY)
+        blockCanvas:TransitionToBlock(rootBlock, origX, origY)
         blockCanvas:SetFrozen(false)
         if pass then
             callbacks.ShowCampaignFeedback(true, msg)

@@ -20,6 +20,11 @@ BlockDefs.VAR_H = 30
 BlockDefs.GAP = 8
 BlockDefs.SNAP_RADIUS = 28
 
+-- 咬合齿形常量
+BlockDefs.TOOTH_W = 8       -- 三角凸起宽度
+BlockDefs.TOOTH_H = 12      -- 三角凸起高度
+BlockDefs.NOTCH_DEPTH = 8   -- 凹槽深度
+
 -- 颜色方案 (Frutiger Aero + Arknights: 玻璃质感科幻)
 BlockDefs.Colors = {
     variable    = { 80, 200, 220, 230 },   -- 青色胶囊
@@ -31,6 +36,83 @@ BlockDefs.Colors = {
     border      = { 255, 255, 255, 80 },
     glow        = { 100, 200, 255, 40 },
 }
+
+-- ============================================================================
+-- 参数名 → 色相映射系统
+-- ============================================================================
+
+--- 参数名到色相的映射表（常见名预设）
+local PARAM_HUES = {
+    x = 200,   -- 天蓝
+    y = 140,   -- 翠绿
+    z = 320,   -- 玫红
+    f = 45,    -- 橙金
+    g = 270,   -- 紫
+    n = 170,   -- 青
+    m = 10,    -- 红橙
+    a = 60,    -- 黄
+    b = 230,   -- 靛蓝
+    p = 100,   -- 草绿
+    q = 290,   -- 粉紫
+    s = 350,   -- 桃红
+    t = 80,    -- 柠檬绿
+}
+
+--- 获取参数名对应的色相 (0-360)
+function BlockDefs.getParamHue(name)
+    if not name then return 200 end
+    if PARAM_HUES[name] then
+        return PARAM_HUES[name]
+    end
+    -- 未预设的名称：基于首字符 hash 计算
+    local b = string.byte(name, 1) or 120
+    return (b * 37) % 360
+end
+
+--- HSL → RGBA 转换
+--- @param hue number 色相 0-360
+--- @param sat number 饱和度 0-1
+--- @param lit number 亮度 0-1
+--- @param alpha number 不透明度 0-255
+--- @return number r, number g, number b, number a
+function BlockDefs.hslToRGBA(hue, sat, lit, alpha)
+    local h = hue / 360
+    local s = sat
+    local l = lit
+
+    local function hue2rgb(p, q, t)
+        if t < 0 then t = t + 1 end
+        if t > 1 then t = t - 1 end
+        if t < 1/6 then return p + (q - p) * 6 * t end
+        if t < 1/2 then return q end
+        if t < 2/3 then return p + (q - p) * (2/3 - t) * 6 end
+        return p
+    end
+
+    local r, g, b
+    if s == 0 then
+        r, g, b = l, l, l
+    else
+        local q = l < 0.5 and (l * (1 + s)) or (l + s - l * s)
+        local p = 2 * l - q
+        r = hue2rgb(p, q, h + 1/3)
+        g = hue2rgb(p, q, h)
+        b = hue2rgb(p, q, h - 1/3)
+    end
+
+    return math.floor(r * 255), math.floor(g * 255), math.floor(b * 255), alpha or 230
+end
+
+--- 获取参数名对应的 RGBA 颜色 (便捷函数)
+--- @param name string 参数名
+--- @param sat number|nil 饱和度(默认0.7)
+--- @param lit number|nil 亮度(默认0.6)
+--- @param alpha number|nil 透明度(默认230)
+--- @return number r, number g, number b, number a
+function BlockDefs.getParamColor(name, sat, lit, alpha)
+    local hue = BlockDefs.getParamHue(name)
+    return BlockDefs.hslToRGBA(hue, sat or 0.7, lit or 0.6, alpha or 230)
+end
 
 -- ============================================================================
 -- Block ID 生成
@@ -116,7 +198,7 @@ function BlockDefs.measure(block)
 
     if block.kind == "variable" then
         local textW = estimateTextWidth(block.name, 13)
-        block.w = math.max(60, textW + P * 2 + 16)
+        block.w = math.max(60, textW + P * 2 + 16) + BlockDefs.TOOTH_W  -- 含右侧三角凸起
         block.h = BlockDefs.VAR_H
 
     elseif block.kind == "abstraction" then
@@ -127,8 +209,8 @@ function BlockDefs.measure(block)
             bodyW = block.slots.body.child.w
             bodyH = block.slots.body.child.h
         end
-        -- C 形容器: header + body + 底部
-        local leftThick = 10  -- C 形左侧厚度
+        -- 管道容器: 左侧含凹槽 + header + body + 底部
+        local leftThick = BlockDefs.NOTCH_DEPTH + 4  -- 凹槽深度 + 内边距
         block.w = leftThick + P + bodyW + P
         block.h = HH + P + bodyH + P
         -- 记录 slot 的相对位置（用于渲染和吸附检测）
@@ -151,8 +233,8 @@ function BlockDefs.measure(block)
             argW = block.slots.arg.child.w
             argH = block.slots.arg.child.h
         end
-        local gap = BlockDefs.GAP
-        local connectorW = 16  -- 中间咬合图形宽度
+        local gap = 4               -- 紧凑间隙（咬合）
+        local connectorW = 10       -- 咬合齿形区域
         block.w = P + funcW + gap + connectorW + gap + argW + P
         block.h = P + math.max(funcH, argH) + P
         -- slot 相对位置
