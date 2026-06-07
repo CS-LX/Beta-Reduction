@@ -134,13 +134,50 @@ function BlockCanvas:AddFlowAnim(text, fromX, fromY, toX, toY, duration, color, 
 end
 
 --- 添加积木闪烁效果
-function BlockCanvas:AddFlashBlock(block, duration, color)
+function BlockCanvas:AddFlashBlock(block, duration, color, delay)
     table.insert(self.flashBlocks_, {
         block = block,
-        elapsed = 0,
+        elapsed = -(delay or 0),
         duration = duration or 0.4,
         color = color or { 255, 255, 100 },
         alive = true,
+    })
+end
+
+--- 添加槽位高亮动画（精确显示数据进入/输出的槽位）
+---@param block table 包含槽位的积木
+---@param slotKey string 槽位名称 ("body", "func", "arg")
+---@param duration number 持续时间
+---@param color number[] 颜色
+---@param delay number 延迟
+function BlockCanvas:AddSlotHighlight(block, slotKey, duration, color, delay)
+    table.insert(self.flashBlocks_, {
+        block = block,
+        slotKey = slotKey,  -- 非 nil 时只高亮指定槽位
+        elapsed = -(delay or 0),
+        duration = duration or 0.5,
+        color = color or { 100, 220, 255 },
+        alive = true,
+    })
+end
+
+--- 添加替换指示器动画（在积木附近显示 "x → value" 文字标签）
+---@param x number 画布 X
+---@param y number 画布 Y
+---@param text string 显示文本（如 "x → 2"）
+---@param duration number 持续时间
+---@param color number[] 颜色
+---@param delay number 延迟
+function BlockCanvas:AddSubstitutionLabel(x, y, text, duration, color, delay)
+    table.insert(self.flowAnims_, {
+        text = text,
+        fromX = x, fromY = y - 6,
+        toX = x, toY = y - 14,   -- 轻微上浮
+        elapsed = -(delay or 0),
+        duration = duration or 0.8,
+        color = color or { 255, 200, 80 },
+        alive = true,
+        isLabel = true,  -- 标记为静态标签（不画弧线，字体更大）
     })
 end
 
@@ -156,7 +193,7 @@ function BlockCanvas:ClearAnims()
     self.flowCallback_ = nil
 end
 
---- 检查是否有动画在播放
+--- 检查是否有动画在播放（包括延迟等待中的）
 function BlockCanvas:HasActiveAnims()
     for _, a in ipairs(self.flowAnims_) do
         if a.alive then return true end
@@ -461,24 +498,42 @@ function BlockCanvas:Render(nvg)
         self:_renderBlock(nvg, block)
     end
 
-    -- 渲染积木闪烁效果
+    -- 渲染积木闪烁效果（支持整块 or 槽位级高亮）
     for _, f in ipairs(self.flashBlocks_) do
         if f.alive and f.elapsed >= 0 then
             local t = f.elapsed / f.duration
-            -- 脉冲衰减: 先亮后暗
             local pulse = math.sin(t * math.pi) * 0.7
             local alpha = math.floor(pulse * 180)
             if alpha > 0 then
                 local b = f.block
+                local hx, hy, hw, hh
+                if f.slotKey and b.slots and b.slots[f.slotKey] then
+                    -- 槽位级高亮：只高亮指定插槽区域
+                    local slot = b.slots[f.slotKey]
+                    hx = b.x + (slot.rx or 0) - 3
+                    hy = b.y + (slot.ry or 0) - 3
+                    hw = (slot.rw or 40) + 6
+                    hh = (slot.rh or 30) + 6
+                else
+                    -- 整块高亮
+                    hx = b.x - 2
+                    hy = b.y - 2
+                    hw = b.w + 4
+                    hh = b.h + 4
+                end
                 nvgBeginPath(nvg)
-                nvgRoundedRect(nvg, b.x - 2, b.y - 2, b.w + 4, b.h + 4, 10)
+                nvgRoundedRect(nvg, hx, hy, hw, hh, 8)
                 nvgFillColor(nvg, nvgRGBA(f.color[1], f.color[2], f.color[3], alpha))
                 nvgFill(nvg)
+                -- 边缘描边让高亮更清晰
+                nvgStrokeColor(nvg, nvgRGBA(f.color[1], f.color[2], f.color[3], math.min(255, alpha + 60)))
+                nvgStrokeWidth(nvg, 1.5)
+                nvgStroke(nvg)
             end
         end
     end
 
-    -- 渲染数据流动画（飘动胶囊）
+    -- 渲染数据流动画（飘动胶囊 + 替换标签）
     for _, a in ipairs(self.flowAnims_) do
         if a.alive and a.elapsed >= 0 then
             local t = a.elapsed / a.duration
@@ -486,43 +541,67 @@ function BlockCanvas:Render(nvg)
             local et = 1 - (1 - t) * (1 - t) * (1 - t)
             local cx = a.fromX + (a.toX - a.fromX) * et
             local cy = a.fromY + (a.toY - a.fromY) * et
-            -- 轻微弧形偏移
-            local arcOffset = math.sin(et * math.pi) * 20
-            cy = cy - arcOffset
 
-            -- 透明度：出现 → 保持 → 微弱消散
+            -- 透明度：出现 → 保持 → 消散
             local alpha = 240
             if t < 0.15 then
                 alpha = math.floor(t / 0.15 * 240)
-            elseif t > 0.85 then
-                alpha = math.floor((1 - t) / 0.15 * 240)
+            elseif t > 0.75 then
+                alpha = math.floor((1 - t) / 0.25 * 240)
             end
 
-            -- 缩放
-            local sc = 1.0
-            if t < 0.1 then sc = 0.5 + t / 0.1 * 0.5 end
+            if a.isLabel then
+                -- 替换指示器：无弧线，大字体，带背景板
+                local tw = math.max(50, #a.text * 7 + 20)
+                local th = 20
+                nvgSave(nvg)
+                nvgTranslate(nvg, cx, cy)
+                -- 背景圆角矩形
+                nvgBeginPath(nvg)
+                nvgRoundedRect(nvg, -tw / 2, -th / 2, tw, th, 4)
+                nvgFillColor(nvg, nvgRGBA(30, 30, 40, math.floor(alpha * 0.8)))
+                nvgFill(nvg)
+                nvgStrokeColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], alpha))
+                nvgStrokeWidth(nvg, 1)
+                nvgStroke(nvg)
+                -- 文字
+                nvgFontFace(nvg, "sans")
+                nvgFontSize(nvg, 12)
+                nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+                nvgFillColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], alpha))
+                nvgText(nvg, 0, 0, a.text)
+                nvgRestore(nvg)
+            else
+                -- 飘动胶囊：带弧形偏移
+                local arcOffset = math.sin(et * math.pi) * 20
+                cy = cy - arcOffset
 
-            -- 绘制胶囊
-            local tw = math.max(40, #a.text * 8 + 16)
-            local th = 22
-            nvgSave(nvg)
-            nvgTranslate(nvg, cx, cy)
-            nvgScale(nvg, sc, sc)
-            nvgBeginPath(nvg)
-            nvgRoundedRect(nvg, -tw / 2, -th / 2, tw, th, th / 2)
-            nvgFillColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], math.floor(alpha * 0.4)))
-            nvgFill(nvg)
-            nvgStrokeColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], alpha))
-            nvgStrokeWidth(nvg, 1.5)
-            nvgStroke(nvg)
+                -- 缩放
+                local sc = 1.0
+                if t < 0.1 then sc = 0.5 + t / 0.1 * 0.5 end
 
-            -- 文字
-            nvgFontFace(nvg, "sans")
-            nvgFontSize(nvg, 11)
-            nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-            nvgFillColor(nvg, nvgRGBA(255, 255, 255, alpha))
-            nvgText(nvg, 0, 0, a.text)
-            nvgRestore(nvg)
+                -- 绘制胶囊
+                local tw = math.max(40, #a.text * 8 + 16)
+                local th = 22
+                nvgSave(nvg)
+                nvgTranslate(nvg, cx, cy)
+                nvgScale(nvg, sc, sc)
+                nvgBeginPath(nvg)
+                nvgRoundedRect(nvg, -tw / 2, -th / 2, tw, th, th / 2)
+                nvgFillColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], math.floor(alpha * 0.4)))
+                nvgFill(nvg)
+                nvgStrokeColor(nvg, nvgRGBA(a.color[1], a.color[2], a.color[3], alpha))
+                nvgStrokeWidth(nvg, 1.5)
+                nvgStroke(nvg)
+
+                -- 文字
+                nvgFontFace(nvg, "sans")
+                nvgFontSize(nvg, 11)
+                nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+                nvgFillColor(nvg, nvgRGBA(255, 255, 255, alpha))
+                nvgText(nvg, 0, 0, a.text)
+                nvgRestore(nvg)
+            end
         end
     end
 
