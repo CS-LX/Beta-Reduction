@@ -384,12 +384,12 @@ function CampaignUI.createLevelHUD(levelId)
         top = 0, left = 0,
         pointerEvents = "box-none",  -- 容器不拦截事件，子元素(按钮等)可点击
         children = {
-            -- 左上: 目标 + 操作
+            -- 右侧: 目标 + 操作
             UI.Panel {
                 position = "absolute",
-                top = 78,
-                left = 8,
-                width = 200,
+                top = 8,
+                right = 8,
+                width = 210,
                 flexDirection = "column",
                 gap = 8,
                 paddingTop = 10,
@@ -492,10 +492,10 @@ function CampaignUI._createTutorialPanel(level)
 
     return UI.Panel {
         position = "absolute",
-        top = 78,
-        right = 8,
+        bottom = 8,
+        left = 8,
         width = 240,
-        maxHeight = 400,
+        maxHeight = 300,
         flexDirection = "column",
         gap = 3,
         paddingTop = 10,

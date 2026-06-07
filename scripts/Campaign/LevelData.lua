@@ -5,12 +5,12 @@
 --   从 3 个基础积木 (变量/抽象/应用) 出发，逐步构建直到四则运算器。
 --   每关通过后，构建的表达式变成"预制积木"，后续关卡可直接使用。
 --
--- 5章 14关:
---   第1章 认识 Lambda   (身份函数、选择器)
---   第2章 布尔逻辑      (TRUE/FALSE、NOT、AND/OR)
---   第3章 数字之源      (Church数、后继SUCC)
---   第4章 算术运算      (加法ADD、乘法MUL)
---   第5章 BOSS: 完整运算器 (前驱PRED、减法SUB、组合)
+-- 5章 18关 (难度曲线更平缓):
+--   第1章 认识 Lambda   (4关: 身份函数、应用入门、选择器K、选择器KI)
+--   第2章 布尔逻辑      (5关: TRUE/FALSE 认识、NOT、AND、OR)
+--   第3章 数字之源      (4关: ZERO、ONE、TWO、SUCC)
+--   第4章 算术运算      (3关: ADD、MUL、幂)
+--   第5章 BOSS          (2关: PRED、组合运算)
 -- ============================================================================
 
 local LevelData = {}
@@ -22,7 +22,7 @@ local LevelData = {}
 LevelData.levels = {
 
     -- ========================================================================
-    -- 第1章: 认识 Lambda
+    -- 第1章: 认识 Lambda (4关)
     -- ========================================================================
 
     {
@@ -36,10 +36,9 @@ LevelData.levels = {
               .. "你的任务：让镜子接收一个东西，然后原样返回它。",
         tutorial = {
             "这是你的第一个挑战！",
-            "你有三种基础积木：",
+            "你有两种基础积木：",
             "  • 变量 (青色) —— 代表一个名字/占位符",
             "  • 抽象 λx.M (紫色) —— 创建函数：接收 x，返回 M",
-            "  • 应用 (F A) (绿色) —— 将函数 F 应用到参数 A",
             "",
             "目标：构建 λx.x",
             "  1. 放一个「抽象」积木 (参数为 x)",
@@ -47,18 +46,13 @@ LevelData.levels = {
             "  3. 这就是身份函数：接收 x，返回 x",
         },
         hint = "把一个变量 x 放进 λx 的 body 槽中",
-        -- 可用积木 (nil = 全部可用)
         availableBlocks = { "var", "abs" },
-        -- 验证: 表达式形态
-        -- "structural" = 结构匹配 (alpha等价)
-        -- "behavioral" = 行为测试 (输入→输出)
         verifyMode = "behavioral",
         testCases = {
             { input = "a", expect = "a" },
             { input = "b", expect = "b" },
             { input = "(λy.y)", expect = "(λy.y)" },
         },
-        -- 通关奖励: 解锁的预制积木
         reward = {
             id = "I",
             name = "I (身份)",
@@ -69,6 +63,43 @@ LevelData.levels = {
 
     {
         id = "1-2",
+        chapter = 1,
+        title = "传话筒",
+        subtitle = "应用入门",
+        description = "用「应用」积木把函数 I 作用到变量 a 上，得到结果 a。",
+        story = "你有了镜子 I，但怎么「使用」它呢？\n"
+              .. "这就需要第三种积木：「应用」。\n\n"
+              .. "「应用」(绿色)把左边的函数作用到右边的参数上。\n"
+              .. "试试把 I 应用到 a，看看会发生什么。",
+        tutorial = {
+            "新积木登场：",
+            "  • 应用 (F A) (绿色) —— 将函数 F 应用到参数 A",
+            "",
+            "应用有两个槽：",
+            "  左边 = 函数 (func)",
+            "  右边 = 参数 (arg)",
+            "",
+            "目标：构建 (I a)",
+            "  1. 放一个「应用」积木",
+            "  2. 左边放预制积木 I (从左边面板拖入)",
+            "  3. 右边放一个变量 a",
+            "",
+            "提交后会自动化简：I a → a",
+        },
+        hint = "应用积木的 func 槽放 I，arg 槽放变量 a",
+        availableBlocks = { "var", "app" },
+        availablePrefabs = { "I" },
+        verifyMode = "behavioral",
+        testCases = {
+            { input = "", expect = "a", raw = true },
+        },
+        -- 特殊验证：结果化简为 a
+        verifyExact = "a",
+        reward = nil,  -- 本关不解锁新积木，纯练习
+    },
+
+    {
+        id = "1-3",
         chapter = 1,
         title = "偏心天平",
         subtitle = "第一选择器 K",
@@ -106,7 +137,7 @@ LevelData.levels = {
     },
 
     {
-        id = "1-3",
+        id = "1-4",
         chapter = 1,
         title = "影子收藏家",
         subtitle = "第二选择器 KI",
@@ -140,7 +171,7 @@ LevelData.levels = {
     },
 
     -- ========================================================================
-    -- 第2章: 布尔逻辑
+    -- 第2章: 布尔逻辑 (5关)
     -- ========================================================================
 
     {
@@ -192,7 +223,7 @@ LevelData.levels = {
               .. "简单，对吧？动手验证一下。",
         tutorial = {
             "FALSE = λt.λf.f",
-            "和上一关的 KI 一模一样。",
+            "和上一章的 KI 一模一样。",
             "",
             "目标：构建 λt.λf.f",
         },
@@ -234,10 +265,16 @@ LevelData.levels = {
             "",
             "目标：构建 λb.(b FALSE TRUE)",
             "",
-            "注意：这里的 FALSE 和 TRUE 是你之前解锁的预制积木！",
-            "可以直接从左侧面板拖入使用。",
+            "构建提示：",
+            "  1. 放一个 λb 抽象",
+            "  2. body 里放一个「应用」积木",
+            "  3. 「应用」的左边再放一个「应用」",
+            "  4. 最内层应用: func=b, arg=FALSE",
+            "  5. 外层应用: func=(b FALSE), arg=TRUE",
+            "",
+            "注意：FALSE 和 TRUE 是预制积木，从左边面板拖入！",
         },
-        hint = "λb. 然后在 body 里：应用 b 到 FALSE，再应用到 TRUE",
+        hint = "λb. 然后 body 里构建 ((b FALSE) TRUE)，需要两个应用积木嵌套",
         availableBlocks = { "var", "abs", "app" },
         availablePrefabs = { "TRUE", "FALSE" },
         verifyMode = "behavioral",
@@ -271,9 +308,16 @@ LevelData.levels = {
             "  AND TRUE  q = TRUE q FALSE  → q   (取决于q)",
             "  AND FALSE q = FALSE q FALSE → FALSE",
             "",
+            "构建方法：",
+            "  1. 放 λp 抽象",
+            "  2. body 里放 λq 抽象",
+            "  3. 最内层 body: ((p q) FALSE)",
+            "     两个应用积木嵌套，最内层 func=p arg=q",
+            "     外层 func=(p q) arg=FALSE",
+            "",
             "目标：构建 λp.λq.(p q FALSE)",
         },
-        hint = "λp.λq. 然后 body 是: (p q) FALSE，即把 p 应用到 q 和 FALSE",
+        hint = "λp.λq. body 是 ((p q) FALSE)，内层应用 p 到 q，外层再应用到 FALSE",
         availableBlocks = { "var", "abs", "app" },
         availablePrefabs = { "TRUE", "FALSE" },
         verifyMode = "behavioral",
@@ -309,9 +353,13 @@ LevelData.levels = {
             "  OR TRUE  q = TRUE TRUE q → TRUE",
             "  OR FALSE q = FALSE TRUE q → q",
             "",
+            "和 AND 结构类似，只是参数不同：",
+            "  AND 用 FALSE 作兜底",
+            "  OR 用 TRUE 作兜底",
+            "",
             "目标：构建 λp.λq.(p TRUE q)",
         },
-        hint = "λp.λq. 然后 body 是: (p TRUE) q",
+        hint = "λp.λq. body 是 ((p TRUE) q)",
         availableBlocks = { "var", "abs", "app" },
         availablePrefabs = { "TRUE", "FALSE" },
         verifyMode = "behavioral",
@@ -330,7 +378,7 @@ LevelData.levels = {
     },
 
     -- ========================================================================
-    -- 第3章: 数字之源
+    -- 第3章: 数字之源 (4关)
     -- ========================================================================
 
     {
@@ -362,11 +410,10 @@ LevelData.levels = {
         hint = "和 FALSE/KI 结构相同：λf.λx.x",
         availableBlocks = { "var", "abs" },
         verifyMode = "behavioral",
-        testCases = {
-            { input = "succ zero", expect = "zero" },  -- ZERO f x = x
-        },
-        -- 特殊验证: Church 数检测
         verifyChurch = 0,
+        testCases = {
+            { input = "succ zero", expect = "zero" },
+        },
         reward = {
             id = "ZERO",
             name = "ZERO (0)",
@@ -379,13 +426,12 @@ LevelData.levels = {
         id = "3-2",
         chapter = 3,
         title = "第一道光",
-        subtitle = "数字 ONE 和 TWO",
-        description = "构建数字 1：把 f 应用 1 次到 x。",
+        subtitle = "数字 ONE",
+        description = "构建数字 1：把 f 应用 1 次到 x。\n即 λf.λx.(f x)",
         story = "有了 0，自然需要 1。\n\n"
               .. "  ONE = λf.λx. f x\n"
               .. "  （把 f 作用到 x 一次）\n\n"
-              .. "构建完 1 后，试试 2：\n"
-              .. "  TWO = λf.λx. f (f x)",
+              .. "这是第一次在最内层需要用「应用」积木！",
         tutorial = {
             "ONE = λf.λx. f x",
             "",
@@ -405,7 +451,7 @@ LevelData.levels = {
         verifyChurch = 1,
         verifyMode = "behavioral",
         testCases = {
-            { input = "succ zero", expect = "succ zero" },  -- ONE f x = f x
+            { input = "succ zero", expect = "succ zero" },
         },
         reward = {
             id = "ONE",
@@ -418,10 +464,51 @@ LevelData.levels = {
     {
         id = "3-3",
         chapter = 3,
+        title = "双生",
+        subtitle = "数字 TWO",
+        description = "构建数字 2：把 f 应用 2 次到 x。\n即 λf.λx.f (f x)",
+        story = "规律已经很明显了：\n\n"
+              .. "  TWO = λf.λx. f (f x)\n"
+              .. "  （把 f 作用到 x 两次）\n\n"
+              .. "提示：内部结构是 f 应用到 (f x)，\n"
+              .. "需要两个嵌套的「应用」积木。",
+        tutorial = {
+            "TWO = λf.λx. f (f x)",
+            "",
+            "结构分析：",
+            "  最内层: (f x) —— 一个应用",
+            "  外层: f (f x) —— 另一个应用",
+            "  即两个应用积木嵌套",
+            "",
+            "构建方法：",
+            "  1. 放 λf.λx 两层抽象",
+            "  2. 放一个应用积木 A1: func=f, arg=x",
+            "  3. 再放一个应用积木 A2: func=f, arg=A1",
+            "",
+            "目标：构建 λf.λx.f (f x)",
+        },
+        hint = "两个应用积木嵌套：外层的 arg 是内层整体",
+        availableBlocks = { "var", "abs", "app" },
+        verifyChurch = 2,
+        verifyMode = "behavioral",
+        testCases = {
+            { input = "succ zero", expect = "succ (succ zero)" },
+        },
+        reward = {
+            id = "TWO",
+            name = "TWO (2)",
+            expr = "λf.λx.f (f x)",
+            description = "Church 数 2：应用 f 两次",
+        },
+    },
+
+    {
+        id = "3-4",
+        chapter = 3,
         title = "后继者",
         subtitle = "后继函数 SUCC",
-        description = "构建 SUCC —— 给任何数字 +1。",
-        story = "数字 0、1 你能手工搭建。但不可能手搭到 100。\n\n"
+        description = "构建 SUCC —— 给任何数字 +1。\n不用手搭每个数字了！",
+        story = "数字 0、1、2 你能手工搭建。但不可能手搭到 100。\n\n"
               .. "你需要「后继函数 SUCC」：\n"
               .. "  SUCC n = n + 1\n\n"
               .. "关键洞察：如果 n 是「f 应用 n 次」，\n"
@@ -434,15 +521,17 @@ LevelData.levels = {
             "解读：",
             "  接收 n (一个 Church 数)",
             "  返回一个新的 Church 数：λf.λx. ...",
-            "  新数的含义：先让 n 把 f 作用到 x n 次,",
-            "               得到的结果再多做一次 f",
+            "  body: 先让 n 把 f 作用到 x 共 n 次,",
+            "        得到的结果再多做一次 f",
             "",
-            "构建提示：",
-            "  外三层: λn.λf.λx.",
-            "  body: f 应用到 (n f x)",
-            "  其中 (n f x) 需要两次嵌套「应用」",
+            "结构拆解 (由内到外)：",
+            "  (n f) —— 一个应用: func=n, arg=f",
+            "  ((n f) x) —— 再一个应用: func=(n f), arg=x",
+            "  (f ((n f) x)) —— 最外一个应用: func=f, arg=上面结果",
             "",
-            "目标：构建 λn.λf.λx.f(n f x)",
+            "一共 3 个应用积木 + 3 层 λ 抽象",
+            "",
+            "目标：构建 λn.λf.λx.f((n f) x)",
         },
         hint = "三层λ嵌套后，body 里是 (f ((n f) x))，共需要三个应用积木",
         availableBlocks = { "var", "abs", "app" },
@@ -462,7 +551,7 @@ LevelData.levels = {
     },
 
     -- ========================================================================
-    -- 第4章: 算术运算
+    -- 第4章: 算术运算 (3关)
     -- ========================================================================
 
     {
@@ -487,10 +576,13 @@ LevelData.levels = {
             "  = n + 1 + 1 + ... (m 个 +1)",
             "  = n + m",
             "",
-            "这里可以直接使用你的 SUCC 预制积木！",
+            "构建方法：",
+            "  1. 放 λm.λn 两层抽象",
+            "  2. body: ((m SUCC) n)",
+            "     内层应用: func=m, arg=SUCC预制积木",
+            "     外层应用: func=(m SUCC), arg=n",
             "",
-            "目标：构建 λm.λn.(m SUCC n)",
-            "  即 λm.λn.((m SUCC) n)",
+            "目标：构建 λm.λn.((m SUCC) n)",
         },
         hint = "λm.λn. body 是 ((m SUCC) n)，需要两个应用积木嵌套，以及 SUCC 预制",
         availableBlocks = { "var", "abs", "app" },
@@ -515,25 +607,25 @@ LevelData.levels = {
         chapter = 4,
         title = "倍增术",
         subtitle = "乘法 MUL",
-        description = "构建 MUL —— 两个 Church 数相乘。",
-        story = "乘法同样优雅：\n\n"
-              .. "  MUL m n = 做 m 次「加 n」从 0 开始\n"
-              .. "         = m (ADD n) ZERO\n\n"
-              .. "或者更直接的编码：\n"
+        description = "构建 MUL —— 两个 Church 数相乘。\n比加法还简洁！",
+        story = "乘法的编码出奇优雅：\n\n"
               .. "  MUL = λm.λn.λf. m (n f)\n"
-              .. "  含义：m 次应用 (n 次应用 f) = m*n 次应用 f",
+              .. "  含义：m 次应用 (n 次应用 f) = m*n 次应用 f\n\n"
+              .. "这就是函数组合！2 次做 3 件事 = 做 6 件事。",
         tutorial = {
-            "MUL 有两种编码（都正确）：",
+            "MUL = λm.λn.λf. m (n f)",
             "",
-            "方案A（用预制积木）：",
-            "  MUL = λm.λn. m (ADD n) ZERO",
+            "解读：",
+            "  把 (n f) 看作一整个函数 g",
+            "  g 做一次 = 做 n 次 f",
+            "  m 次做 g = m*n 次 f",
             "",
-            "方案B（纯函数组合，更简洁）：",
-            "  MUL = λm.λn.λf. m (n f)",
-            "  含义：把 (n f) 看作一整个函数，",
-            "        m 次应用它 = m*n 次应用 f",
+            "结构和 SUCC 类似，三层 λ：",
+            "  1. 放 λm.λn.λf 三层抽象",
+            "  2. body: (m (n f))",
+            "     内层应用: func=n, arg=f",
+            "     外层应用: func=m, arg=(n f)",
             "",
-            "推荐方案B，只需要基础积木：",
             "目标：构建 λm.λn.λf.m (n f)",
         },
         hint = "三层λ后，body 是 (m (n f))：两个应用积木",
@@ -548,14 +640,57 @@ LevelData.levels = {
         },
         reward = {
             id = "MUL",
-            name = "MUL (×)",
+            name = "MUL (x)",
             expr = "λm.λn.λf.m (n f)",
-            description = "乘法：m × n",
+            description = "乘法：m x n",
+        },
+    },
+
+    {
+        id = "4-3",
+        chapter = 4,
+        title = "次方术",
+        subtitle = "幂运算 POW",
+        description = "构建 POW —— m 的 n 次方。\n这是本章最简洁的编码！",
+        story = "令人惊叹的是，幂运算的编码比加法和乘法都简洁：\n\n"
+              .. "  POW = λm.λn. n m\n\n"
+              .. "就这么简单！为什么？\n"
+              .. "  n m = 把 m「做 n 次」\n"
+              .. "  而 Church 数 m 本身是「做 m 次」\n"
+              .. "  做 n 次「做 m 次」= 做 m^n 次\n\n"
+              .. "（注意参数顺序：n m 而不是 m n！）",
+        tutorial = {
+            "POW = λm.λn. n m",
+            "",
+            "这可能是最简洁的运算编码了：",
+            "  只有两层 λ 和一个应用积木！",
+            "",
+            "理解：",
+            "  Church 数 n 接收一个函数后，会做 n 次",
+            "  把 m (也是一个 Church 数/函数) 传给 n",
+            "  = 做 n 次 m = m^n",
+            "",
+            "目标：构建 λm.λn.(n m)",
+        },
+        hint = "λm.λn. body 只需要一个应用积木: func=n, arg=m",
+        availableBlocks = { "var", "abs", "app" },
+        verifyMode = "behavioral",
+        testCases = {
+            -- POW 2 3 = 8: 2^3
+            { input = "(λf.λx.f (f x)) (λf.λx.f (f (f x)))", expect = "λf.λx.f (f (f (f (f (f (f (f x)))))))" },
+            -- POW 3 2 = 9: 3^2
+            { input = "(λf.λx.f (f (f x))) (λf.λx.f (f x))", expect = "λf.λx.f (f (f (f (f (f (f (f (f x))))))))" },
+        },
+        reward = {
+            id = "POW",
+            name = "POW (^)",
+            expr = "λm.λn.n m",
+            description = "幂运算：m^n",
         },
     },
 
     -- ========================================================================
-    -- 第5章: BOSS 战
+    -- 第5章: BOSS 战 (2关)
     -- ========================================================================
 
     {
@@ -563,7 +698,7 @@ LevelData.levels = {
         chapter = 5,
         title = "配对术",
         subtitle = "有序对 PAIR",
-        description = "构建 PAIR —— 把两个值打包在一起。前驱函数需要它。",
+        description = "构建 PAIR —— 把两个值打包在一起。\n后续的前驱函数需要它。",
         story = "减法需要「前驱函数 PRED」(n-1)。\n"
               .. "但 PRED 的构建需要先学会「配对」。\n\n"
               .. "PAIR 把两个值打包：\n"
@@ -581,15 +716,18 @@ LevelData.levels = {
             "  (PAIR x y) TRUE  → TRUE x y → x",
             "  (PAIR x y) FALSE → FALSE x y → y",
             "",
-            "目标：构建 λa.λb.λf.(f a b)",
-            "  即 λa.λb.λf.((f a) b)",
+            "结构：三层 λ + 两个应用积木",
+            "  body: ((f a) b)",
+            "  内层: func=f, arg=a",
+            "  外层: func=(f a), arg=b",
+            "",
+            "目标：构建 λa.λb.λf.((f a) b)",
         },
         hint = "三层 λ 后，body 是 ((f a) b)，两个应用积木",
         availableBlocks = { "var", "abs", "app" },
         availablePrefabs = { "TRUE", "FALSE" },
         verifyMode = "behavioral",
         testCases = {
-            -- (PAIR a b) TRUE = a
             { input = "hello world", expect = "λf.f hello world", raw = true },
         },
         reward = {
@@ -603,142 +741,53 @@ LevelData.levels = {
     {
         id = "5-2",
         chapter = 5,
-        title = "倒退一步",
-        subtitle = "前驱函数 PRED",
-        description = "构建 PRED —— 给 Church 数 -1（难度最高的一关！）",
-        story = "前驱是 Lambda 演算中最具挑战性的构造！\n\n"
-              .. "思路：用 PAIR 做「滑动窗口」：\n"
-              .. "  从 (0, 0) 出发，\n"
-              .. "  每步 (a, b) → (b, b+1)，\n"
-              .. "  做 n 步后取第一个元素。\n\n"
-              .. "  PRED n = FST (n STEP (PAIR ZERO ZERO))\n"
-              .. "  其中 STEP = λp. PAIR (SND p) (SUCC (SND p))\n\n"
-              .. "这关可以用预制积木组合！",
-        tutorial = {
-            "PRED 用「配对滑窗」实现：",
-            "",
-            "  STEP = λp. PAIR (p FALSE) (SUCC (p FALSE))",
-            "    取出对的第二个值，做成新对 (old_snd, old_snd+1)",
-            "",
-            "  PRED = λn. n STEP (PAIR ZERO ZERO) TRUE",
-            "    初始对 = (0, 0)",
-            "    执行 n 次 STEP：(0,1)→(1,2)→(2,3)→...",
-            "    最后取第一个 = n-1",
-            "",
-            "这很复杂！可以分步构建。",
-            "本关允许使用所有已解锁的预制积木。",
-            "",
-            "目标：构建 PRED 使得 PRED n = n-1",
-        },
-        hint = "分步：先做 STEP，再组合 PRED = λn. (n STEP (PAIR ZERO ZERO)) TRUE",
-        availableBlocks = { "var", "abs", "app" },
-        availablePrefabs = { "ZERO", "SUCC", "PAIR", "TRUE", "FALSE" },
-        verifyMode = "behavioral",
-        testCases = {
-            -- PRED 1 = 0
-            { input = "(λf.λx.f x)", expect = "λf.λx.x" },
-            -- PRED 2 = 1
-            { input = "(λf.λx.f (f x))", expect = "λf.λx.f x" },
-            -- PRED 3 = 2
-            { input = "(λf.λx.f (f (f x)))", expect = "λf.λx.f (f x)" },
-        },
-        reward = {
-            id = "PRED",
-            name = "PRED (-1)",
-            expr = "λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)",
-            description = "前驱函数：n - 1",
-        },
-    },
-
-    {
-        id = "5-3",
-        chapter = 5,
-        title = "减法降临",
-        subtitle = "减法 SUB",
-        description = "构建 SUB —— m 减 n。有了 PRED 这就简单了。",
-        story = "和加法的思路对称：\n\n"
-              .. "  ADD m n = m SUCC n   (对 n 做 m 次 +1)\n"
-              .. "  SUB m n = n PRED m   (对 m 做 n 次 -1)\n\n"
-              .. "一行搞定。",
-        tutorial = {
-            "SUB 的编码：",
-            "  SUB = λm.λn. n PRED m",
-            "",
-            "解读：对 m 执行 n 次 PRED (n 次 -1)",
-            "  = m - n",
-            "",
-            "目标：构建 λm.λn.(n PRED m)",
-            "  即 λm.λn.((n PRED) m)",
-        },
-        hint = "λm.λn. body 是 ((n PRED) m)，和 ADD 结构对称",
-        availableBlocks = { "var", "abs", "app" },
-        availablePrefabs = { "PRED" },
-        verifyMode = "behavioral",
-        testCases = {
-            -- SUB 3 1 = 2
-            { input = "(λf.λx.f (f (f x))) (λf.λx.f x)", expect = "λf.λx.f (f x)" },
-            -- SUB 2 2 = 0
-            { input = "(λf.λx.f (f x)) (λf.λx.f (f x))", expect = "λf.λx.x" },
-        },
-        reward = {
-            id = "SUB",
-            name = "SUB (-)",
-            expr = "λm.λn.n (λn.λf.λx.n (λg.λh.h (g f)) (λu.x) (λu.u)) m",
-            description = "减法：m - n",
-        },
-    },
-
-    {
-        id = "5-4",
-        chapter = 5,
-        title = "终极考验：四则运算器",
-        subtitle = "BOSS: 计算器",
-        description = "用你解锁的所有预制积木，构建一个能做加减乘的运算器！",
+        title = "终极考验：运算组合",
+        subtitle = "BOSS: 运算选择器",
+        description = "构建一个运算选择器：接收布尔 op、两个数 m n，\n当 op=TRUE 返回 ADD m n，当 op=FALSE 返回 MUL m n。",
         story = "恭喜你走到了最后！\n\n"
               .. "你从三个最基础的积木出发，\n"
-              .. "发明了布尔逻辑、自然数、加减乘。\n\n"
-              .. "最终挑战：构建一个「运算选择器」\n"
+              .. "发明了布尔逻辑、自然数、加法、乘法、幂运算。\n\n"
+              .. "最终挑战：构建一个运算选择器 CALC\n"
               .. "  CALC op m n\n"
-              .. "  op = 0 → ADD m n\n"
-              .. "  op = 1 → SUB m n\n"
-              .. "  op = 2 → MUL m n\n\n"
-              .. "用 Church 数做 if-else 选择！\n"
-              .. "（提示：用 PAIR 做选择表/Case分支）",
+              .. "  op = TRUE  → ADD m n (加法)\n"
+              .. "  op = FALSE → MUL m n (乘法)\n\n"
+              .. "提示：布尔值就是选择函数！\n"
+              .. "  op (ADD m n) (MUL m n)\n"
+              .. "  TRUE选第一个 = ADD，FALSE选第二个 = MUL",
         tutorial = {
             "最终 BOSS！",
             "",
-            "构建 CALC = λop.λm.λn.",
-            "  如果 op=0，返回 ADD m n",
-            "  如果 op=1，返回 SUB m n",
-            "  如果 op=2，返回 MUL m n",
+            "CALC = λop.λm.λn. op (ADD m n) (MUL m n)",
             "",
-            "提示：你有多种方式实现选择逻辑，",
-            "  方案1: 用嵌套 PAIR 做查找表",
-            "  方案2: 用 Church 数的 n 次应用做 case 选择",
+            "分析：",
+            "  op 是一个布尔值 (TRUE/FALSE)",
+            "  TRUE 选第一个参数 → ADD m n",
+            "  FALSE 选第二个参数 → MUL m n",
+            "",
+            "结构：三层 λ + 多个应用积木",
+            "  先构建 (ADD m n)：((ADD m) n)",
+            "  再构建 (MUL m n)：((MUL m) n)",
+            "  最后 ((op 第一个结果) 第二个结果)",
             "",
             "你可以使用所有已解锁的预制积木！",
-            "祝你好运，Lambda 大师！",
         },
-        hint = "一种方案：ops = PAIR (PAIR ADD SUB) MUL，然后根据 op 索引",
+        hint = "λop.λm.λn. body 是 ((op (ADD m n)) (MUL m n))，分别构建两个运算结果再让 op 选择",
         availableBlocks = { "var", "abs", "app" },
-        availablePrefabs = { "ADD", "SUB", "MUL", "PAIR", "TRUE", "FALSE", "ZERO", "ONE", "SUCC" },
+        availablePrefabs = { "ADD", "MUL", "TRUE", "FALSE", "ZERO", "ONE", "SUCC" },
         verifyMode = "behavioral",
         testCases = {
-            -- CALC 0 2 3 = ADD 2 3 = 5
-            { input = "(λf.λx.x) (λf.λx.f (f x)) (λf.λx.f (f (f x)))",
+            -- CALC TRUE 2 3 = ADD 2 3 = 5
+            { input = "(λt.λf.t) (λf.λx.f (f x)) (λf.λx.f (f (f x)))",
               expect = "λf.λx.f (f (f (f (f x))))" },
-            -- CALC 1 3 1 = SUB 3 1 = 2
-            { input = "(λf.λx.f x) (λf.λx.f (f (f x))) (λf.λx.f x)",
-              expect = "λf.λx.f (f x)" },
-            -- CALC 2 2 3 = MUL 2 3 = 6
-            { input = "(λf.λx.f (f x)) (λf.λx.f (f x)) (λf.λx.f (f (f x)))",
+            -- CALC FALSE 2 3 = MUL 2 3 = 6
+            { input = "(λt.λf.f) (λf.λx.f (f x)) (λf.λx.f (f (f x)))",
               expect = "λf.λx.f (f (f (f (f (f x)))))" },
         },
         reward = {
             id = "CALC",
             name = "CALC (计算器)",
-            expr = "λop.λm.λn.op (ADD m n) (SUB m n) (MUL m n)",
-            description = "四则运算选择器",
+            expr = "λop.λm.λn.op (ADD m n) (MUL m n)",
+            description = "运算选择器：TRUE=加法，FALSE=乘法",
         },
         isBoss = true,
     },
@@ -749,11 +798,11 @@ LevelData.levels = {
 -- ============================================================================
 
 LevelData.chapters = {
-    { id = 1, title = "认识 Lambda",  subtitle = "变量、抽象、应用",  icon = "🪞" },
+    { id = 1, title = "认识 Lambda",  subtitle = "变量、抽象、应用",      icon = "🪞" },
     { id = 2, title = "布尔逻辑",    subtitle = "TRUE/FALSE/NOT/AND/OR", icon = "🔮" },
     { id = 3, title = "数字之源",    subtitle = "Church 数与后继",       icon = "🔢" },
-    { id = 4, title = "算术运算",    subtitle = "加法与乘法",           icon = "➕" },
-    { id = 5, title = "终极考验",    subtitle = "BOSS: 四则运算器",     icon = "⚔️" },
+    { id = 4, title = "算术运算",    subtitle = "加法、乘法、幂",        icon = "➕" },
+    { id = 5, title = "终极考验",    subtitle = "BOSS: 运算选择器",      icon = "⚔️" },
 }
 
 -- ============================================================================
