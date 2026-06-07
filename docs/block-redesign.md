@@ -1,7 +1,7 @@
 # 积木系统重构策划案
 
-> 版本: v1.0 | 日期: 2026-06-07
-> 状态追踪: 每个 Phase 完成后标记 ✅ READY
+> 版本: v2.0 | 日期: 2026-06-08
+> 状态: ✅ 全部完成
 
 ---
 
@@ -23,62 +23,122 @@
 | Alligator Eggs | "吃→替换→壳消失"的物理动作感 |
 | Visual Lambda (Bubble) | 色彩标识作用域 |
 | 管道/机器隐喻 | 入口→内部→出口的数据流 |
-| 拼图/USB 接口 | 凹凸咬合的"插入"手感 |
+| **拼图块** | 半圆凸起⊃嵌入半圆凹口⊂ — 几何严格互补 |
+
+---
+
+## 核心设计原则（v2 — 半圆拼图 + 扁平水平）
+
+1. **半圆凸起(bump) ⊃ 完美嵌入半圆凹口(indent) ⊂** — 同半径几何互补
+2. **所有积木扁平水平排列** — 彻底取消容器嵌套，不再看起来像 AST
+3. **Application 不可见** — func 和 arg 通过 bump⊃⊂indent 直接咬合
+4. **Abstraction 不是容器** — `[λx 头]⊃⊂[body]` 水平并排
+
+---
+
+## 关键常量
+
+```lua
+BLOCK_H   = 38    -- 标准积木高度
+BUMP_R    = 7     -- 半圆凸起/凹口半径（关键咬合尺寸）
+HEADER_W  = 46    -- λx 头部宽度
+VAR_PAD   = 14    -- 变量积木文本水平 padding
+SLOT_MIN_W = 48   -- 空槽最小宽度
+SLOT_MIN_H = 36   -- 空槽最小高度
+CORNER_R  = 4     -- 积木圆角半径
+SNAP_RADIUS = 30  -- 吸附检测半径
+```
 
 ---
 
 ## 三种基本元的物理形态
 
-### Variable (变量) — "出口喷嘴/钥匙"
+### Variable (变量) — "扁平药片"
 
 ```
-    ╭──────╮
-    │  x  ◂├▷  ← 右侧三角凸起（齿形，可插入 λ 入口）
-    ╰──────╯
+    ╭──────────╮
+    │    x     │     ← 扁平药片，h=38
+    ╰──────────╯
+
+    上下文决定连接器:
+    - 作为 func slot 子块 → 右侧半圆 bump ⊃
+    - 作为 arg/body slot 子块 → 左侧半圆 indent ⊂
+    - 顶层独立 → 无连接器
 ```
 
-- 形状: 圆角矩形 + **右侧三角凸起**
+- 形状: 圆角矩形 + **上下文感知的半圆连接器**
 - 颜色: 继承其绑定 λ 的色相（同色 = 同源）
-- 隐喻: "这里会涌出东西" — 替换时参数从这些位置冒出
+- 尺寸: `w = max(52, textW + VAR_PAD*2)`, `h = BLOCK_H`
 
-### Abstraction (函数) — "管道机器"
-
-```
-    ┏━━━━━━━━━━━━━━━━━━━━━━━┓
-◁━━━┫  λx                    ┃
-入口 ┃  ┌─────────────────┐  ┃
-(三角┃  │     body         │  ┃
- 凹槽)  │   (内部空间)     │  ┃
-    ┃  └─────────────────┘  ┃
-    ┗━━━━━━━━━━━━━━━━━━━━━━━┛
-```
-
-- 形状: 左侧有**三角凹槽入口**的管道容器
-- 入口颜色 = 参数名色相
-- header 区展示 `λ参数名`
-- body 区内嵌子积木
-- 隐喻: "把东西从三角入口塞进去，内部同色出口涌出"
-
-### Application (应用) — "咬合/对接"
+### Abstraction (函数) — "头部 + body 水平拼图"
 
 ```
-    ┏━━━━━━━━━━┓╔══════╗
-◁━━━┫  λx      ┃║ arg ◂├▷  ← arg 的凸起嵌入 func 的凹口
-    ┃  body    ┣◁▷     ║
-    ┃          ┃║      ║
-    ┗━━━━━━━━━━┛╚══════╝
+    ╭────────╮⊃⊂╭────────────╮
+    │  λx    │    │   body     │
+    ╰────────╯    ╰────────────╯
+     头部(46px)     body子块
+
+    头部右侧始终有 bump ⊃（连接 body）
+    body 子块左侧始终有 indent ⊂（接收头部的 bump）
+    整体上下文连接器由 parentSlotKey 决定
 ```
 
-- 保留**极淡背景**区分层级（不画明显外壳）
-- func 和 arg 通过三角齿形物理咬合
+- 形状: `[λx 头部]` 水平紧接 `[body]`，**不是容器**
+- 头部颜色: 参数名色相（深色调）
+- 头部右侧: 始终有 bump（连接 body）
+- body: 独立渲染的子积木（自带左侧 indent）
+- 尺寸: `w = HEADER_W + bodyW`, `h = max(BLOCK_H, bodyH)`
+- 隐喻: "把东西从左侧推入，在内部同色位置涌出"
+
+### Application (应用) — "不可见咬合"
+
+```
+    ╭────────╮⊃⊂╭────────╮
+    │  func  │    │  arg   │
+    ╰────────╯    ╰────────╯
+
+    func 右侧 bump ⊃ 嵌入 arg 左侧 indent ⊂
+    Application 本身不渲染任何外壳
+```
+
+- **完全不可见** — 仅在选中时微弱虚线边框
+- func slot 子块: 右侧有 bump（`parentSlotKey == "func"`）
+- arg slot 子块: 左侧有 indent（`parentSlotKey == "arg"`）
+- 两者 bump⊃⊂indent 视觉上严格互锁
+- 尺寸: `w = funcW + argW`, `h = max(funcH, argH)`
 - 隐喻: "钥匙插入锁孔，即将发生反应"
+
+---
+
+## 半圆几何实现（NanoVG）
+
+```lua
+--- 右侧凸起: 从 cy-R 向右画半圆到 cy+R
+nvgArc(nvg, x + w, cy, R, -math.pi/2, math.pi/2, NVG_CW)
+
+--- 左侧凹口: 从 cy+R 向右凹入画半圆到 cy-R
+nvgArc(nvg, x, cy, R, math.pi/2, -math.pi/2, NVG_CCW)
+```
+
+**关键**: 同半径 R=7px，凸起向右突出 R 像素，凹口向右凹入 R 像素，几何严格互补。
+
+---
+
+## 上下文连接器规则
+
+| parentSlotKey | 左侧 indent | 右侧 bump |
+|---------------|-------------|-----------|
+| `"func"` | ✗ | ✓ |
+| `"arg"` | ✓ | ✗ |
+| `"body"` | ✓ | ✗ |
+| 无 parent（顶层） | ✗ | ✗ |
+| 抽象头部（特殊） | 由上下文决定 | ✓（始终连 body） |
 
 ---
 
 ## 色彩系统：参数名 → 色相映射
 
 ```lua
--- 每个参数名映射到唯一色相，变量自动继承绑定者的颜色
 local PARAM_HUES = {
     x = 200,   -- 天蓝
     y = 140,   -- 翠绿
@@ -94,8 +154,7 @@ local PARAM_HUES = {
     s = 350,   -- 桃红
     t = 80,    -- 柠檬绿
 }
--- 未列出的：基于名字首字符 hash 计算
--- hue = (string.byte(name, 1) * 37) % 360
+-- 未列出的：hue = (string.byte(name, 1) * 37) % 360
 ```
 
 ---
@@ -107,79 +166,37 @@ local PARAM_HUES = {
 | 阶段 | 名称 | 视觉效果 | 时长 |
 |------|------|---------|------|
 | 1 | **对接高亮** | 整个 application 闪烁，arg 颜色加深 | 0.5s |
-| 2 | **吞入** | arg 积木滑向 λ 的入口凹槽，缩小消失 | 0.7s |
+| 2 | **吞入** | arg 滑向 body 左侧半圆凹口，缩小消失 | 0.7s |
 | 3 | **替换涌出** | body 内同色变量逐个膨胀变形为 arg 副本 | 0.5s/个 |
-| 4 | **壳消融** | λ 外壳碎裂成粒子蒸发，body 弹出释放 | 0.6s |
+| 4 | **破壳弹出** | λ 壳碎裂粒子蒸发，新积木 spring overshoot 弹出 | 0.8s |
 
-### 壳消融粒子效果
+### 动画坐标说明（v2）
 
-```
-λ 外壳拆解为 8~12 个三角碎片:
-- 每片从边缘位置生成
-- 初速度向外 + 略微旋转
-- 透明度快速衰减 (0.4s 内消失)
-- 同时 body 积木从中心弹出 (spring overshoot)
-```
+- **吞入目标**: `lambdaBlock.x + HEADER_W`（body 左侧凹口 X）, `lambdaBlock.y + h/2`（垂直居中）
+- **内部流动起点**: `lambdaBlock.x + HEADER_W + BUMP_R`（凹口内侧）
+- **破壳弹出**: 新积木从壳中心用 `1 - e^(-6t)*cos(4πt)` spring overshoot 弹出
 
 ---
 
-## 实施 Phases
+## 布局算法（扁平水平）
 
-### Phase 1: 重写 _renderVarBlock — ✅ READY
+```
+Variable:
+  w = max(52, textWidth + VAR_PAD * 2)
+  h = BLOCK_H (38)
 
-改动文件: `scripts/Blocks/BlockCanvas.lua`, `scripts/Blocks/BlockDefs.lua`
+Abstraction:
+  w = HEADER_W + bodyW
+  h = max(BLOCK_H, bodyH)
+  slots.body.rx = HEADER_W   ← body 在头部右侧
+  slots.body.ry = (h - bodyH) / 2
 
-- 新增 `BlockDefs.getParamHue(name)` 色相映射函数
-- 新增 `BlockDefs.hueToRGBA(hue, sat, lightness, alpha)` HSL→RGBA 转换
-- variable 积木加入**右侧三角凸起**渲染
-- variable 颜色由 `block.boundParam`（绑定者的参数名）决定色相
-- 在 `ASTToBlock` 转换时，写入 `block.boundParam` 字段（向上查找绑定的 λ）
-
-### Phase 2: 重写 _renderAbsBlock — ✅ READY
-
-改动文件: `scripts/Blocks/BlockCanvas.lua`, `scripts/Blocks/BlockDefs.lua`
-
-- header 区使用参数名色相着色
-- 左侧绘制**三角凹槽**入口（Path: 上边→凹三角→下边）
-- 入口凹槽颜色 = 参数名色相（与内部变量同色）
-- body 区保持深色背景
-- 调整 measure: `leftThick` 改为含凹槽的宽度
-
-### Phase 3: 重写 _renderAppBlock — ✅ READY
-
-改动文件: `scripts/Blocks/BlockCanvas.lua`, `scripts/Blocks/BlockDefs.lua`
-
-- 移除绿色外壳描边
-- 改为极淡背景 (alpha ~15) 仅区分层级
-- func 和 arg 之间绘制**咬合连接区**:
-  - func 右侧的凹口（如果 func 是 abstraction）
-  - arg 左侧的凸起
-  - 两者紧密贴合（gap 缩小为 0）
-- 中间三角指示符改为咬合齿形
-
-### Phase 4: 调整 measure/layout — ✅ READY
-
-改动文件: `scripts/Blocks/BlockDefs.lua`
-
-- variable: 宽度增加三角凸起 (TOOTH_W ≈ 8px)
-- abstraction: 左侧增加凹槽空间
-- application: gap 和 connectorW 调整，反映咬合状态
-- 新增常量: `TOOTH_W = 8`, `TOOTH_H = 12`, `NOTCH_DEPTH = 8`
-
-### Phase 5: 重写归约动画 — ✅ READY
-
-改动文件: `scripts/Campaign/FlowAnimation.lua`, `scripts/Blocks/BlockCanvas.lua`
-
-- 新增 `BlockCanvas:AddShatterAnim(block, duration, delay)` — 碎裂粒子
-- 修改 `animateOneReduction`:
-  1. 高亮 application
-  2. arg 滑入 λ 凹槽 (从右向左飞入，缩小消失)
-  3. body 内变量逐个膨胀替换
-  4. λ 壳碎裂消融 + body 弹出
-- 修改 `animateFeedInput`:
-  1. 外部输入从左侧滑入凹槽
-  2. 内部变量涌出替换
-  3. λ 壳消融
+Application:
+  w = funcW + argW
+  h = max(funcH, argH)
+  slots.func.rx = 0
+  slots.arg.rx = funcW        ← arg 紧接 func 右侧
+```
 
 ---
 
@@ -187,10 +204,20 @@ local PARAM_HUES = {
 
 | 文件 | 职责 |
 |------|------|
-| `scripts/Blocks/BlockDefs.lua` | 积木数据结构、尺寸计算、色彩映射 |
-| `scripts/Blocks/BlockCanvas.lua` | 积木渲染（NanoVG 绘制）+ 动画播放 |
-| `scripts/Campaign/FlowAnimation.lua` | 归约动画编排 |
-| `scripts/Campaign/CampaignScene.lua` | ASTToBlock 转换（需添加 boundParam） |
+| `scripts/Blocks/BlockDefs.lua` | 积木数据结构、扁平布局计算、色彩映射、吸附检测 |
+| `scripts/Blocks/BlockCanvas.lua` | 积木渲染（NanoVG 半圆拼图绘制）+ 动画播放 |
+| `scripts/Campaign/FlowAnimation.lua` | 归约动画编排（四阶段白箱动画） |
+| `scripts/Campaign/CampaignScene.lua` | ASTToBlock 转换（含 boundParam 绑定） |
+
+---
+
+## 设计演进历史
+
+| 版本 | 方案 | 问题 |
+|------|------|------|
+| v0 | AST 树形嵌套 | 看起来像语法树，非物理拼图 |
+| v1 | 三角梯形齿 | 两个反向梯形几何上无法咬合 |
+| **v2** | **半圆 bump/indent** | ✅ 同半径几何严格互补，扁平水平不像 AST |
 
 ---
 
@@ -198,5 +225,5 @@ local PARAM_HUES = {
 
 - 整个重构保持 Block 数据结构向后兼容（`kind`, `slots`, `name`, `param` 字段不变）
 - 新增字段: `block.boundParam`（变量的绑定参数名，用于颜色查找）
-- 新增字段: `block.bindingHue`（缓存计算好的色相值）
-- 拖拽/吸附逻辑暂不改动（Phase 4 只改尺寸，不改吸附机制）
+- bump/indent 是**纯视觉渲染层**，不影响布局宽度计算（layout 只管 body width）
+- 拖拽/吸附逻辑不受影响（仍用 slot 中心点距离检测）

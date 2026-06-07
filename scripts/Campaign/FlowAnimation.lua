@@ -103,19 +103,20 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
 
     ---------------------------------------------------------------------------
     -- 模式 A 辅助：在 lambda 积木上展示"喂入一个值"的动画
-    -- 三阶段：吞入凹槽 → 替换涌出 → 壳消融
+    -- 三阶段：吞入凹槽 → 替换涌出 → 破壳弹出
+    -- nextBlock: 归约结果积木（预先构建好），在破壳动画中弹出
     ---------------------------------------------------------------------------
-    local function animateFeedInput(lambdaBlock, inputStr, delay)
+    local function animateFeedInput(lambdaBlock, inputStr, delay, nextBlock)
         local dur = 0.0
 
         -- 构建真实积木对象用于飞行动画
         local inputAST = Verifier.Parser.parse(inputStr)
         local inputBlock = inputAST and ASTToBlock(inputAST) or nil
 
-        -- 阶段1: 吞入 — 外部输入从左侧滑入 λ 凹槽
+        -- 阶段1: 吞入 — 外部输入从左侧滑入 body 的半圆凹口
         local SWALLOW_DUR = 0.7
-        local notchX = lambdaBlock.x + BlockDefs.NOTCH_DEPTH / 2
-        local notchY = lambdaBlock.y + (BlockDefs.HEADER_H or 26) + (lambdaBlock.h - (BlockDefs.HEADER_H or 26)) * 0.5
+        local notchX = lambdaBlock.x + BlockDefs.HEADER_W  -- body 左侧凹口位置
+        local notchY = lambdaBlock.y + lambdaBlock.h / 2   -- 垂直居中
         local startX = lambdaBlock.x - 80
         local startY = notchY
         blockCanvas:AddFlowAnim(
@@ -151,8 +152,8 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                     vb, inputStr, EMERGE_DUR,
                     { 255, 180, 80 }, viDelay
                 )
-                -- 从凹槽方向流入指示
-                local flowFromX = lambdaBlock.x + BlockDefs.NOTCH_DEPTH
+                -- 从凹口方向流入指示
+                local flowFromX = lambdaBlock.x + BlockDefs.HEADER_W + BlockDefs.BUMP_R
                 local flowFromY = notchY
                 blockCanvas:AddInternalFlow(
                     inputStr,
@@ -174,19 +175,25 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
             dur = dur + 0.2
         end
 
-        -- 阶段3: 壳消融 — λ 外壳碎裂蒸发
-        local SHATTER_DUR = 0.6
-        blockCanvas:AddShatterAnim(lambdaBlock, SHATTER_DUR, delay + dur)
-        dur = dur + SHATTER_DUR
+        -- 阶段3: 破壳弹出 — λ 壳渐隐碎裂，新积木从壳内弹出
+        local BREAK_DUR = 0.8
+        if nextBlock then
+            blockCanvas:AddBreakShellAnim(lambdaBlock, nextBlock, origX, origY, BREAK_DUR, delay + dur)
+        else
+            -- fallback: 没有 nextBlock 时仍用旧的碎裂（不应发生）
+            blockCanvas:AddShatterAnim(lambdaBlock, BREAK_DUR, delay + dur)
+        end
+        dur = dur + BREAK_DUR
 
         return dur
     end
 
     ---------------------------------------------------------------------------
     -- 模式 B 辅助：在画布积木上做一步 β-归约动画
-    -- 四阶段：对接高亮 → 吞入 → 替换涌出 → 壳消融
+    -- 四阶段：对接高亮 → 吞入 → 替换涌出 → 破壳弹出
+    -- nextBlock: 归约结果积木（预先构建好），在破壳动画中弹出
     ---------------------------------------------------------------------------
-    local function animateOneReduction(delay)
+    local function animateOneReduction(delay, nextBlock)
         local roots = blockCanvas:GetRootBlocks()
         local curBlock = roots[1]
         if not curBlock then return 0.3 end
@@ -211,14 +218,14 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
         end
         dur = dur + 0.5
 
-        -- 阶段2: 吞入 — arg 滑向 λ 入口凹槽，缩小消失
+        -- 阶段2: 吞入 — arg 从右侧滑向 body 左侧半圆凹口，被吞入消失
         local SWALLOW_DUR = 0.7
         if argBlock and argFlyBlock then
             local argCX = argBlock.x + argBlock.w / 2
             local argCY = argBlock.y + argBlock.h / 2
-            -- 目标: λ 左侧凹槽入口中心
-            local notchX = lambdaBlock.x + BlockDefs.NOTCH_DEPTH / 2
-            local notchY = lambdaBlock.y + (BlockDefs.HEADER_H or 26) + (lambdaBlock.h - (BlockDefs.HEADER_H or 26)) * 0.5
+            -- 目标: body 左侧半圆凹口（arg 到达此处即被吞入）
+            local notchX = lambdaBlock.x + BlockDefs.HEADER_W
+            local notchY = lambdaBlock.y + lambdaBlock.h / 2
             blockCanvas:AddFlowAnim(
                 argStr, argCX, argCY,
                 notchX, notchY,
@@ -254,9 +261,9 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                     vb, argStr, EMERGE_DUR,
                     { 255, 180, 80 }, viDelay
                 )
-                -- 同时从凹槽方向发出微小流动指示
-                local flowFromX = lambdaBlock.x + BlockDefs.NOTCH_DEPTH
-                local flowFromY = lambdaBlock.y + (BlockDefs.HEADER_H or 26) + (lambdaBlock.h - (BlockDefs.HEADER_H or 26)) * 0.5
+                -- 同时从凹口方向发出微小流动指示
+                local flowFromX = lambdaBlock.x + BlockDefs.HEADER_W + BlockDefs.BUMP_R
+                local flowFromY = lambdaBlock.y + lambdaBlock.h / 2
                 blockCanvas:AddInternalFlow(
                     argStr,
                     flowFromX, flowFromY,
@@ -277,10 +284,15 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
             dur = dur + 0.2
         end
 
-        -- 阶段4: 壳消融 — λ 外壳碎裂成粒子蒸发
-        local SHATTER_DUR = 0.6
-        blockCanvas:AddShatterAnim(lambdaBlock, SHATTER_DUR, delay + dur)
-        dur = dur + SHATTER_DUR
+        -- 阶段4: 破壳弹出 — 整个当前根积木(壳)渐隐碎裂，新积木从壳内弹出
+        local BREAK_DUR = 0.8
+        if nextBlock then
+            blockCanvas:AddBreakShellAnim(curBlock, nextBlock, origX, origY, BREAK_DUR, delay + dur)
+        else
+            -- fallback: 没有 nextBlock 时仍用旧的碎裂（不应发生）
+            blockCanvas:AddShatterAnim(curBlock, BREAK_DUR, delay + dur)
+        end
+        dur = dur + BREAK_DUR
 
         return dur
     end
@@ -360,13 +372,9 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                                 flyOutResult()
                                 return
                             end
-                            local stepDur = animateOneReduction(0.05)
+                            local nextBlock = ASTToBlock(trace[sIdx + 1])
+                            local stepDur = animateOneReduction(0.05, nextBlock)
                             blockCanvas:AddTimedAction(stepDur + STEP_GAP, function()
-                                local nextAST = trace[sIdx + 1]
-                                local nextBlock = ASTToBlock(nextAST)
-                                if nextBlock then
-                                    blockCanvas:TransitionToBlock(nextBlock, origX, origY)
-                                end
                                 runInternalStep(sIdx + 1)
                             end)
                         end
@@ -382,17 +390,16 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                 local curBlock = roots[1]
 
                 if curBlock and curBlock.kind == "abstraction" then
-                    local stepDur = animateFeedInput(curBlock, inputStr, 0.05)
+                    -- 预先计算归约结果积木
+                    local inputAST = Verifier.Parser.parse(inputStr)
+                    if currentAST and currentAST.kind == "abstraction" and inputAST then
+                        currentAST = AST.substitute(currentAST.body, currentAST.param, inputAST)
+                    end
+                    local newBlock = ASTToBlock(currentAST)
+
+                    local stepDur = animateFeedInput(curBlock, inputStr, 0.05, newBlock)
 
                     blockCanvas:AddTimedAction(stepDur + STEP_GAP, function()
-                        local inputAST = Verifier.Parser.parse(inputStr)
-                        if currentAST and currentAST.kind == "abstraction" and inputAST then
-                            currentAST = AST.substitute(currentAST.body, currentAST.param, inputAST)
-                        end
-                        local newBlock = ASTToBlock(currentAST)
-                        if newBlock then
-                            blockCanvas:TransitionToBlock(newBlock, origX, origY)
-                        end
                         feedInput(inputIdx + 1)
                     end)
                 else
@@ -414,12 +421,9 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                             flyOutResult()
                             return
                         end
-                        local stepDur = animateOneReduction(0.05)
+                        local nextBlock = ASTToBlock(trace[sIdx + 1])
+                        local stepDur = animateOneReduction(0.05, nextBlock)
                         blockCanvas:AddTimedAction(stepDur + STEP_GAP, function()
-                            local nextBlock = ASTToBlock(trace[sIdx + 1])
-                            if nextBlock then
-                                blockCanvas:TransitionToBlock(nextBlock, origX, origY)
-                            end
                             runFallbackStep(sIdx + 1)
                         end)
                     end
@@ -446,10 +450,7 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
 
             local function runStep(stepIdx)
                 if stepIdx > numSteps then
-                    local finalBlock = ASTToBlock(resultAST)
-                    if finalBlock then
-                        blockCanvas:TransitionToBlock(finalBlock, origX, origY)
-                    end
+                    -- 最终结果已由最后一步的 breakShell 动画放置好
                     local roots = blockCanvas:GetRootBlocks()
                     local outBlock = roots[1]
                     local outX = outBlock and (outBlock.x + outBlock.w / 2) or (origX + 50)
@@ -468,12 +469,9 @@ function M.play(blockCanvas, rootBlock, playerAST, testCases, pass, msg, level, 
                     return
                 end
 
-                local stepDur = animateOneReduction(0.05)
+                local nextBlock = ASTToBlock(trace[stepIdx + 1])
+                local stepDur = animateOneReduction(0.05, nextBlock)
                 blockCanvas:AddTimedAction(stepDur + STEP_GAP, function()
-                    local nextBlock = ASTToBlock(trace[stepIdx + 1])
-                    if nextBlock then
-                        blockCanvas:TransitionToBlock(nextBlock, origX, origY)
-                    end
                     runStep(stepIdx + 1)
                 end)
             end
