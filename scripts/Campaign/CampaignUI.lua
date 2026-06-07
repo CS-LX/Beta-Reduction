@@ -382,7 +382,7 @@ function CampaignUI.createLevelHUD(levelId)
         height = "100%",
         position = "absolute",
         top = 0, left = 0,
-        -- 不拦截事件 (仅 HUD 面板本身响应)
+        pointerEvents = "box-none",  -- 容器不拦截事件，子元素(按钮等)可点击
         children = {
             -- 左上: 目标 + 操作
             UI.Panel {
