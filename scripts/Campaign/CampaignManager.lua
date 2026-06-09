@@ -11,6 +11,7 @@
 local LevelData = require("Campaign.LevelData")
 local Verifier = require("Campaign.Verifier")
 local AST = require("Lambda.AST")
+local FeatureGate = require("Campaign.FeatureGate")
 
 local CampaignManager = {}
 
@@ -126,30 +127,32 @@ end
 ---@param playerAST table  玩家构建的 AST
 ---@return boolean success 是否通过
 ---@return string msg 反馈信息
+---@return table|nil newUnlock 新解锁的功能 { featureId, message }
 function CampaignManager.submitAnswer(playerAST)
     local level = CampaignManager.getCurrentLevel()
     if not level then
-        return false, "当前不在关卡中"
+        return false, "当前不在关卡中", nil
     end
 
     -- 调用验证器
     local pass, msg = Verifier.verify(playerAST, level)
 
     if pass then
-        CampaignManager._markCompleted(level)
-        return true, msg
+        local newUnlock = CampaignManager._markCompleted(level)
+        return true, msg, newUnlock
     end
 
-    return false, msg
+    return false, msg, nil
 end
 
 --- 标记关卡完成, 解锁奖励
+---@return table|nil  新解锁的功能信息 { featureId, message }
 function CampaignManager._markCompleted(level)
     -- 避免重复记录
     for _, id in ipairs(state.completedLevels) do
         if id == level.id then
             print("[CampaignManager] 关卡已经完成过: " .. level.id)
-            return
+            return nil
         end
     end
 
@@ -163,6 +166,17 @@ function CampaignManager._markCompleted(level)
         print("[CampaignManager] 解锁预制积木: " .. level.reward.name)
     end
 
+    -- 检测新功能解锁（知识锁）
+    local newUnlockId = FeatureGate.checkNewUnlock(level.id)
+    local newUnlock = nil
+    if newUnlockId then
+        newUnlock = {
+            featureId = newUnlockId,
+            message = FeatureGate.getUnlockMessage(newUnlockId),
+        }
+        print("[CampaignManager] 新功能解锁: " .. newUnlockId)
+    end
+
     -- 更新最高解锁
     local idx = LevelData.getLevelIndex(level.id)
     if idx then
@@ -174,6 +188,8 @@ function CampaignManager._markCompleted(level)
 
     -- 自动保存
     CampaignManager.save()
+
+    return newUnlock
 end
 
 -- ============================================================================

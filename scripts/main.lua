@@ -315,6 +315,7 @@ local function InitModules()
                 local presetFn = AST.Presets[name]
                 if presetFn then
                     block = ASTToBlock(presetFn())
+                    BlockDefs.wrapPresetAsGroup(block, name)
                 end
             end
             if block then

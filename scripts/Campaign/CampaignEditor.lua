@@ -7,11 +7,14 @@ local UI = require("urhox-libs/UI")
 local AST = require("Lambda.AST")
 local BlockDefs = require("Blocks.BlockDefs")
 local BlockCanvas = require("Blocks.BlockCanvas")
+local LambdaGraph = require("Graph.LambdaGraph")
+local Packager = require("Lambda.Packager")
 local Evaluator = require("Lambda.Evaluator")
 local CampaignManager = require("Campaign.CampaignManager")
 local CampaignUI = require("Campaign.CampaignUI")
 local LevelData = require("Campaign.LevelData")
 local FlowAnimation = require("Campaign.FlowAnimation")
+local FeatureGate = require("Campaign.FeatureGate")
 
 local M = {}
 
@@ -33,6 +36,7 @@ end
 -- ============================================================================
 
 local blockCanvas_ = nil
+local lambdaGraph_ = nil
 local evalExprLabel_ = nil
 local leftPanelTitle_ = nil
 local leftPanelContent_ = nil
@@ -48,13 +52,22 @@ local uiRoot_ = nil
 local evalExpr_ = ""
 local appMode_ = "menu"
 
+-- 双视图状态
+local currentView_ = "blocks"   -- "blocks" | "graph"
+local graphViewPanel_ = nil
+local blockViewPanel_ = nil
+local viewToggleBtn_ = nil
+local currentLevelId_ = nil
+
 -- ============================================================================
 -- 状态存取 (供 main 模块协调使用)
 -- ============================================================================
 
 function M.getBlockCanvas() return blockCanvas_ end
+function M.getLambdaGraph() return lambdaGraph_ end
 function M.getUIRoot() return uiRoot_ end
 function M.setAppMode(mode) appMode_ = mode end
+function M.getCurrentView() return currentView_ end
 
 -- ============================================================================
 -- 关卡信息面板
@@ -392,6 +405,117 @@ local function PopulateLeftPanelForCampaign(levelId)
 end
 
 -- ============================================================================
+-- 视图切换（积木 ↔ 节点图）
+-- ============================================================================
+
+function M.switchToGraphView()
+    if currentView_ == "graph" then return end
+    currentView_ = "graph"
+    if blockViewPanel_ then blockViewPanel_:SetVisible(false) end
+    if graphViewPanel_ then graphViewPanel_:SetVisible(true) end
+    if viewToggleBtn_ then viewToggleBtn_:SetText("积木视图") end
+    M.populateLeftPanelForGraph()
+    M.updateInspector()
+    print("[Campaign] 切换到节点图视图")
+end
+
+function M.switchToBlockView()
+    if currentView_ == "blocks" then return end
+    currentView_ = "blocks"
+    if graphViewPanel_ then graphViewPanel_:SetVisible(false) end
+    if blockViewPanel_ then blockViewPanel_:SetVisible(true) end
+    if viewToggleBtn_ then viewToggleBtn_:SetText("节点图") end
+    PopulateLeftPanelForCampaign(currentLevelId_)
+    M.updateInspector()
+    print("[Campaign] 切换到积木视图")
+end
+
+function M.toggleView()
+    if currentView_ == "blocks" then
+        M.switchToGraphView()
+    else
+        M.switchToBlockView()
+    end
+end
+
+--- 填充节点图模式下的左侧面板
+function M.populateLeftPanelForGraph()
+    if not leftPanelContent_ then return end
+    leftPanelContent_:ClearChildren()
+    if leftPanelTitle_ then leftPanelTitle_:SetText("节点库") end
+
+    local availablePrefabs = CampaignManager.getAvailablePrefabs(currentLevelId_)
+
+    leftPanelContent_:AddChild(UI.Label {
+        text = "预置节点",
+        fontSize = 11,
+        fontColor = { 140, 150, 180, 180 },
+        paddingLeft = 12,
+        paddingBottom = 4,
+    })
+
+    for _, prefab in ipairs(availablePrefabs) do
+        leftPanelContent_:AddChild(UI.Button {
+            text = prefab.name,
+            variant = "ghost",
+            size = "sm",
+            width = "100%",
+            textAlign = "left",
+            fontColor = { 200, 140, 255, 255 },
+            onClick = function()
+                if lambdaGraph_ then
+                    local rx = 80 + math.random(0, 250)
+                    local ry = 60 + math.random(0, 180)
+                    lambdaGraph_:AddPresetNode(prefab.id, rx, ry)
+                end
+            end,
+        })
+    end
+
+    leftPanelContent_:AddChild(UI.Panel {
+        width = "90%", height = 1,
+        marginTop = 8, marginBottom = 8,
+        alignSelf = "center",
+        backgroundColor = { 60, 70, 100, 60 },
+    })
+
+    leftPanelContent_:AddChild(UI.Label {
+        text = "操作",
+        fontSize = 11,
+        fontColor = { 140, 150, 180, 180 },
+        paddingLeft = 12,
+        paddingBottom = 4,
+    })
+
+    leftPanelContent_:AddChild(UI.Button {
+        text = "删除选中",
+        variant = "danger",
+        size = "sm",
+        width = "100%",
+        onClick = function()
+            if lambdaGraph_ then
+                if lambdaGraph_.selectedEdgeIdx_ then
+                    lambdaGraph_:RemoveSelectedEdge()
+                elseif lambdaGraph_.selectedId_ then
+                    lambdaGraph_:RemoveNode(lambdaGraph_.selectedId_)
+                end
+                M.updateInspector()
+            end
+        end,
+    })
+
+    leftPanelContent_:AddChild(UI.Button {
+        text = "← 积木视图",
+        variant = "outline",
+        size = "sm",
+        width = "100%",
+        marginTop = 8,
+        fontColor = { 255, 180, 80, 255 },
+        onClick = function() M.switchToBlockView() end,
+    })
+end
+
+-- ============================================================================
 -- 预制积木
 -- ============================================================================
 
@@ -401,6 +525,7 @@ function M.addPrefabBlock(prefabId)
     if ast then
         local block = mainCallbacks_.ASTToBlock(ast)
         if block then
+            BlockDefs.wrapPresetAsGroup(block, prefabId)
             local rx = 100 + math.random(0, 200)
             local ry = 80 + math.random(0, 150)
             blockCanvas_:AddBlock(block, rx, ry)
@@ -454,42 +579,74 @@ end
 
 function M.submitAnswer()
     if appMode_ ~= "campaign_level" then return end
-    if not blockCanvas_ then return end
 
-    if blockCanvas_:IsFrozen() or blockCanvas_:HasActiveAnims() then
-        return
-    end
+    local playerAST = nil
 
-    local roots = blockCanvas_:GetRootBlocks()
-    if #roots == 0 then
-        M.showFeedback(false, "画布为空！请构建一个 Lambda 表达式。")
-        return
-    end
-
-    local playerAST = BlockDefs.toAST(roots[1])
-    if not playerAST then
-        M.showFeedback(false, "无法解析积木为表达式，请检查是否有未连接的槽位。")
-        return
+    if currentView_ == "graph" then
+        -- 节点图模式：从选中节点或最后一个节点求值
+        if not lambdaGraph_ then return end
+        local targetId = lambdaGraph_.selectedId_
+        if not targetId then
+            -- 没有选中节点，找最后添加的节点
+            for id, _ in pairs(lambdaGraph_.nodes_) do
+                targetId = id
+            end
+        end
+        if not targetId then
+            M.showFeedback(false, "节点图为空！请添加节点并连线。")
+            return
+        end
+        playerAST = lambdaGraph_:EvaluateNode(targetId)
+        if not playerAST then
+            local node = lambdaGraph_.nodes_[targetId]
+            if node and node.nodeDef and node.nodeDef.ast then
+                playerAST = node.nodeDef.ast
+            end
+        end
+        if not playerAST then
+            M.showFeedback(false, "无法从节点图解析表达式，请检查连线。")
+            return
+        end
+    else
+        -- 积木模式
+        if not blockCanvas_ then return end
+        if blockCanvas_:IsFrozen() or blockCanvas_:HasActiveAnims() then
+            return
+        end
+        local roots = blockCanvas_:GetRootBlocks()
+        if #roots == 0 then
+            M.showFeedback(false, "画布为空！请构建一个 Lambda 表达式。")
+            return
+        end
+        playerAST = BlockDefs.toAST(roots[1])
+        if not playerAST then
+            M.showFeedback(false, "无法解析积木为表达式，请检查是否有未连接的槽位。")
+            return
+        end
     end
 
     print("[Campaign] 提交答案: " .. AST.toString(playerAST))
 
-    local pass, msg = CampaignManager.submitAnswer(playerAST)
+    local pass, msg, newUnlock = CampaignManager.submitAnswer(playerAST)
 
     local level = CampaignManager.getCurrentLevel()
         or LevelData.getLevelById(CampaignManager.getCurrentLevelId() or "")
     local testCases = level and level.testCases or {}
 
-    if #testCases > 0 then
+    -- 积木模式才有动画（需要 roots[1]），节点图模式跳过动画
+    local canAnimate = (currentView_ == "blocks") and blockCanvas_
+    local roots = canAnimate and blockCanvas_:GetRootBlocks() or {}
+
+    if canAnimate and #testCases > 0 and #roots > 0 then
         FlowAnimation.play(blockCanvas_, roots[1], playerAST, testCases, pass, msg, level, {
             ASTToBlock = mainCallbacks_.ASTToBlock,
             ShowCampaignFeedback = M.showFeedback,
-            ShowVictoryPopup = function(lvl) M.showVictoryPopup(lvl) end,
+            ShowVictoryPopup = function(lvl) M.showVictoryPopup(lvl, newUnlock) end,
         })
     else
         if pass then
             M.showFeedback(true, msg)
-            if level then M.showVictoryPopup(level) end
+            if level then M.showVictoryPopup(level, newUnlock) end
         else
             M.showFeedback(false, msg)
         end
@@ -500,7 +657,7 @@ end
 -- 胜利弹窗
 -- ============================================================================
 
-function M.showVictoryPopup(level)
+function M.showVictoryPopup(level, newUnlock)
     local idx = LevelData.getLevelIndex(level.id)
     local nextLevel = LevelData.levels[idx + 1]
     local isFinalBoss = (level.isBoss and not nextLevel)
@@ -512,7 +669,7 @@ function M.showVictoryPopup(level)
             CampaignManager.exitLevel()
             mainCallbacks_.EnterCampaignLevel(nextLevel.id)
         end
-    end)
+    end, newUnlock)
 
     if uiRoot_ then
         uiRoot_:AddChild(victoryPopup_)
@@ -528,6 +685,12 @@ function M.createLevelUI(levelId)
     if not level then return end
 
     appMode_ = "campaign_level"
+    currentLevelId_ = levelId
+    currentView_ = "blocks"  -- 每次进入关卡默认积木视图
+
+    -- 检查节点图是否已解锁
+    local completedLevels = CampaignManager.getCompletedLevels()
+    local graphUnlocked = FeatureGate.canUseNodeGraph(completedLevels)
 
     -- 创建积木画布
     blockCanvas_ = BlockCanvas {
@@ -550,6 +713,21 @@ function M.createLevelUI(levelId)
         end,
         onBlockDoubleClick = function(block)
             mainCallbacks_.ShowRenameDialogFor(block)
+        end,
+    }
+
+    -- 创建节点图（即使未解锁也创建实例，仅控制可见性）
+    lambdaGraph_ = LambdaGraph {
+        id = "campaignGraph",
+        width = "100%",
+        height = "100%",
+        onSelectionChanged = function(node)
+            M.updateInspector()
+        end,
+        onNodeDoubleClick = function(nodeId)
+            -- 在闯关中不进入积木编辑（避免复杂度过高）
+            -- 仅显示节点信息
+            M.updateInspector()
         end,
     }
 
@@ -671,6 +849,36 @@ function M.createLevelUI(levelId)
 
     campaignHUD_ = CreateCampaignInfoPanel(level)
 
+    -- 视图切换按钮（仅节点图解锁后显示）
+    viewToggleBtn_ = UI.Button {
+        text = "节点图",
+        variant = "outline",
+        size = "sm",
+        fontColor = { 180, 140, 255, 230 },
+        visible = graphUnlocked,
+        onClick = function() M.toggleView() end,
+    }
+
+    -- 双视图面板
+    blockViewPanel_ = UI.Panel {
+        id = "blockViewPanel",
+        width = "100%",
+        height = "100%",
+        position = "absolute",
+        top = 0, left = 0,
+        children = { blockCanvas_ },
+    }
+
+    graphViewPanel_ = UI.Panel {
+        id = "graphViewPanel",
+        width = "100%",
+        height = "100%",
+        position = "absolute",
+        top = 0, left = 0,
+        visible = false,
+        children = { lambdaGraph_ },
+    }
+
     -- 整体布局
     uiRoot_ = UI.Panel {
         id = "campaignRoot",
@@ -707,6 +915,8 @@ function M.createLevelUI(levelId)
                         fontColor = { 140, 200, 255, 255 },
                     },
                     UI.Panel { flex = 1 },
+                    viewToggleBtn_,
+                    UI.Panel { width = 1, height = 28, backgroundColor = { 50, 60, 90, 80 } },
                     UI.Label { text = "表达式:", fontSize = 11, fontColor = { 120, 130, 160, 180 } },
                     evalExprLabel_,
                 }
@@ -734,12 +944,13 @@ function M.createLevelUI(levelId)
                             },
                         }
                     },
-                    -- 中间
+                    -- 中间（双视图）
                     UI.Panel {
                         flex = 1,
                         height = "100%",
                         children = {
-                            blockCanvas_,
+                            blockViewPanel_,
+                            graphViewPanel_,
                             feedbackPanel_,
                             reductionPanel_,
                         },
@@ -776,6 +987,12 @@ function M.createLevelUI(levelId)
     }
 
     UI.SetRoot(uiRoot_)
+
+    -- 如果关卡标记了 preferGraphView 且节点图已解锁，自动切换到节点图视图
+    if level.preferGraphView and graphUnlocked then
+        M.switchToGraphView()
+    end
+
     M.updateInspector()
 
     return uiRoot_, blockCanvas_

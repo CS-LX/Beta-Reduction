@@ -145,6 +145,20 @@ function BlockDefs.measure(block)
     local SM_W = BlockDefs.SLOT_MIN_W
     local SM_H = BlockDefs.SLOT_MIN_H
 
+    -- 积木组 collapsed → 壳尺寸（紧凑）
+    if BlockDefs.isCollapsedGroup(block) then
+        local group = block.group
+        local nameW = estimateTextWidth(group.name, 15)
+        local paramW = 0
+        if group.params and group.params ~= "" then
+            paramW = estimateTextWidth(group.params, 11) + 4
+        end
+        local indicatorW = 16  -- 右侧折叠指示符 "▸"
+        block.w = math.max(BlockDefs.GROUP_MIN_W, 8 + nameW + paramW + indicatorW + 6)
+        block.h = BH
+        return
+    end
+
     if block.kind == "variable" then
         local textW = estimateTextWidth(block.name, 14)
         block.w = math.max(52, textW + BlockDefs.VAR_PAD * 2)
@@ -197,6 +211,8 @@ end
 function BlockDefs.layout(block, ox, oy)
     block.x = ox
     block.y = oy
+    -- 积木组 collapsed → 不展开内部子块布局
+    if BlockDefs.isCollapsedGroup(block) then return end
     for _, slot in pairs(block.slots) do
         if slot.child then
             BlockDefs.layout(slot.child, ox + (slot.rx or 0), oy + (slot.ry or 0))
@@ -308,6 +324,145 @@ function BlockDefs.findRoot(block)
         current = current.parent
     end
     return current
+end
+
+-- ============================================================================
+-- 积木组 (Block Group) — 预制积木封装壳
+-- ============================================================================
+-- 设计:
+--   group 信息挂在根积木上: block.group = { name, params, collapsed }
+--   collapsed=true 时: 整棵树渲染为单个壳（带连接器）
+--   collapsed=false 时: 正常渲染内部积木
+--   双击壳 → 展开（碎裂动画）；长按/右键 → 收起
+
+BlockDefs.GROUP_SHELL_PAD_X = 10   -- 壳内水平 padding
+BlockDefs.GROUP_SHELL_PAD_Y = 4    -- 壳内垂直 padding
+BlockDefs.GROUP_MIN_W = 72         -- 壳最小宽度
+
+--- 预制积木参数映射表
+BlockDefs.PRESET_PARAMS = {
+    I     = "x",
+    K     = "x,y",
+    KI    = "x,y",
+    S     = "x,y,z",
+    TRUE  = "t,f",
+    FALSE = "t,f",
+    NOT   = "b",
+    AND   = "p,q",
+    OR    = "p,q",
+    ZERO  = "f,x",
+    ONE   = "f,x",
+    TWO   = "f,x",
+    SUCC  = "n,f,x",
+    ADD   = "m,n",
+    MUL   = "m,n,f",
+    POW   = "m,n",
+    PAIR  = "a,b,f",
+    CALC  = "op,m,n",
+}
+
+--- 积木组颜色分类（按功能域，每组 {顶色r,g,b,a, 底色r,g,b,a}）
+BlockDefs.GROUP_COLORS = {
+    combinator = { top = {80, 70, 140, 230},  bot = {55, 45, 105, 240} },  -- 紫蓝 — 组合子
+    boolean    = { top = {45, 110, 80, 230},   bot = {30, 80, 58, 240} },   -- 翡翠绿 — 布尔
+    number     = { top = {140, 95, 40, 230},   bot = {105, 70, 25, 240} },  -- 琥珀 — Church数
+    arith      = { top = {140, 55, 55, 230},   bot = {105, 38, 38, 240} },  -- 珊瑚红 — 算术
+    data       = { top = {45, 100, 120, 230},  bot = {30, 72, 90, 240} },   -- 青蓝 — 数据结构
+}
+
+--- 预制积木 → 颜色分类映射
+BlockDefs.PRESET_COLOR_CATEGORY = {
+    I     = "combinator",
+    K     = "combinator",
+    KI    = "combinator",
+    S     = "combinator",
+    TRUE  = "boolean",
+    FALSE = "boolean",
+    NOT   = "boolean",
+    AND   = "boolean",
+    OR    = "boolean",
+    ZERO  = "number",
+    ONE   = "number",
+    TWO   = "number",
+    SUCC  = "arith",
+    ADD   = "arith",
+    MUL   = "arith",
+    POW   = "arith",
+    PAIR  = "data",
+    CALC  = "data",
+}
+
+--- 便捷方法: 为预制积木自动包裹积木组壳
+--- @param block table 已构建的积木树
+--- @param presetName string 预制名（如 "TRUE"）
+--- @return table 已附加 group 字段的 block
+function BlockDefs.wrapPresetAsGroup(block, presetName)
+    local params = BlockDefs.PRESET_PARAMS[presetName] or ""
+    local category = BlockDefs.PRESET_COLOR_CATEGORY[presetName] or "combinator"
+    local color = BlockDefs.GROUP_COLORS[category]
+    return BlockDefs.wrapAsGroup(block, presetName, params, color)
+end
+
+--- 计算积木树节点总数（用于完整性签名）
+--- @param block table
+--- @return integer
+function BlockDefs.countTreeNodes(block)
+    if not block then return 0 end
+    local count = 1
+    if block.slots then
+        for _, slot in pairs(block.slots) do
+            if slot.child then
+                count = count + BlockDefs.countTreeNodes(slot.child)
+            end
+        end
+    end
+    return count
+end
+
+--- 为积木树附加积木组壳
+--- @param block table 根积木（已构建好的完整积木树）
+--- @param name string 显示名称（如 "TRUE", "SUCC"）
+--- @param params? string 参数列表文字（如 "t,f"）
+--- @param color? table 颜色配置 {top={r,g,b,a}, bot={r,g,b,a}}
+--- @return table 原 block（已附加 group 字段）
+function BlockDefs.wrapAsGroup(block, name, params, color)
+    block.group = {
+        name = name,
+        params = params or "",
+        color = color,
+        collapsed = true,
+        signature = BlockDefs.countTreeNodes(block),
+    }
+    return block
+end
+
+--- 检测积木组是否可以收起（结构未被破坏）
+--- @param block table
+--- @return boolean
+function BlockDefs.canCollapseGroup(block)
+    if not block.group then return false end
+    local sig = block.group.signature
+    if not sig then return true end  -- 无签名则允许（兼容旧数据）
+    return BlockDefs.countTreeNodes(block) == sig
+end
+
+--- 展开积木组壳
+function BlockDefs.expandGroup(block)
+    if block.group then
+        block.group.collapsed = false
+    end
+end
+
+--- 收起积木组壳（不检查完整性，由调用方先调 canCollapseGroup）
+function BlockDefs.collapseGroup(block)
+    if block.group then
+        block.group.collapsed = true
+    end
+end
+
+--- 检测积木是否是收起状态的积木组
+function BlockDefs.isCollapsedGroup(block)
+    return block.group ~= nil and block.group.collapsed == true
 end
 
 return BlockDefs

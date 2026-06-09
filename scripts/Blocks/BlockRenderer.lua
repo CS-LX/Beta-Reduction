@@ -103,6 +103,12 @@ end
 --- @param block table 积木数据
 --- @param isSelected boolean 是否选中
 function M.renderBlock(nvg, block, isSelected)
+    -- 积木组壳：collapsed 时优先渲染壳，不渲染内部
+    if BlockDefs.isCollapsedGroup(block) then
+        M.renderGroupShell(nvg, block, isSelected)
+        return
+    end
+
     if block.kind == "variable" then
         M.renderVarBlock(nvg, block, isSelected)
     elseif block.kind == "abstraction" then
@@ -300,6 +306,86 @@ function M.renderSlot(nvg, block, slotKey, placeholder, hintColor)
         nvgTextAlign(nvg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
         nvgFillColor(nvg, nvgRGBA(hintColor[1], hintColor[2], hintColor[3], 50))
         nvgText(nvg, sx + sw / 2, sy + sh / 2, placeholder)
+    end
+end
+
+-- ============================================================================
+-- 积木组壳: 收起状态 — 拼图形状壳 + 名称 + 参数
+-- ============================================================================
+
+--- 渲染积木组壳（collapsed 状态）
+--- 壳覆盖整个积木树的 bbox，拥有与普通积木相同的拼图连接器
+function M.renderGroupShell(nvg, block, isSelected)
+    local x, y, w, h = block.x, block.y, block.w, block.h
+    local group = block.group
+
+    -- 壳使用最小宽度保证可读性
+    local shellW = math.max(w, BlockDefs.GROUP_MIN_W)
+    local shellH = h
+
+    -- 连接器: 继承原积木树根的上下文
+    local leftIndent = M.needsLeftIndent(block)
+    local rightBump = M.needsRightBump(block)
+
+    -- ═══ 壳背景: 拼图形状 ═══
+    M.drawPiecePath(nvg, x, y, shellW, shellH, leftIndent, rightBump)
+
+    -- 渐变填充 — 使用分类颜色
+    local color = group.color or { top = {60, 70, 100, 230}, bot = {40, 48, 72, 240} }
+    local ct, cb = color.top, color.bot
+    local shellPaint = nvgLinearGradient(nvg, x, y, x, y + shellH,
+        nvgRGBA(ct[1], ct[2], ct[3], ct[4]),
+        nvgRGBA(cb[1], cb[2], cb[3], cb[4]))
+    nvgFillPaint(nvg, shellPaint)
+    nvgFill(nvg)
+
+    -- 描边（取顶色亮化作为描边色）
+    local sr, sg, sb = math.min(255, ct[1] + 60), math.min(255, ct[2] + 60), math.min(255, ct[3] + 60)
+    nvgStrokeColor(nvg, nvgRGBA(sr, sg, sb, isSelected and 255 or 140))
+    nvgStrokeWidth(nvg, isSelected and 2.5 or 1.5)
+    nvgStroke(nvg)
+
+    -- 顶部高光
+    nvgBeginPath(nvg)
+    nvgRoundedRect(nvg, x + 4, y + 2, shellW - 8, shellH * 0.25, 3)
+    nvgFillColor(nvg, nvgRGBA(255, 255, 255, 30))
+    nvgFill(nvg)
+
+    -- ═══ 名称文字（大字）═══
+    nvgFontFace(nvg, "sans")
+    nvgFontSize(nvg, 15)
+    nvgTextAlign(nvg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgFillColor(nvg, nvgRGBA(220, 230, 255, 250))
+
+    local nameX = x + 8
+    local centerY = y + shellH / 2
+    local nameEnd = nvgText(nvg, nameX, centerY, group.name)
+
+    -- ═══ 参数文字（小字，紧跟名称后）═══
+    if group.params and group.params ~= "" then
+        nvgFontSize(nvg, 11)
+        nvgFillColor(nvg, nvgRGBA(180, 190, 220, 180))
+        nvgText(nvg, nameEnd + 4, centerY, group.params)
+    end
+
+    -- ═══ 右侧折叠指示符（NanoVG 路径三角形）═══
+    local triX = x + shellW - 14
+    local triSize = 5
+    nvgBeginPath(nvg)
+    nvgMoveTo(nvg, triX, centerY - triSize)
+    nvgLineTo(nvg, triX + triSize, centerY)
+    nvgLineTo(nvg, triX, centerY + triSize)
+    nvgClosePath(nvg)
+    nvgFillColor(nvg, nvgRGBA(180, 190, 220, 140))
+    nvgFill(nvg)
+
+    -- 选中高亮
+    if isSelected then
+        nvgBeginPath(nvg)
+        nvgRoundedRect(nvg, x - 2, y - 2, shellW + 4, shellH + 4, 6)
+        nvgStrokeColor(nvg, nvgRGBA(255, 255, 100, 80))
+        nvgStrokeWidth(nvg, 1.5)
+        nvgStroke(nvg)
     end
 end
 

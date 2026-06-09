@@ -545,14 +545,130 @@ end
 --- 创建通关庆祝面板
 ---@param level table  关卡数据
 ---@param onContinue function  继续回调
+---@param newUnlock table|nil  新解锁的功能 { featureId, message }
 ---@return any UI widget
-function CampaignUI.createVictoryPopup(level, onContinue)
+function CampaignUI.createVictoryPopup(level, onContinue, newUnlock)
     local rewardText = ""
     if level.reward then
         rewardText = "解锁预制积木: " .. level.reward.name .. "\n" .. level.reward.description
     end
 
     local isBoss = level.isBoss
+
+    -- 构建弹窗内容列表
+    local popupChildren = {
+        UI.Label {
+            text = isBoss and "通关！" or "正确！",
+            fontSize = 24,
+            fontColor = isBoss and { 255, 220, 80, 255 } or { 100, 255, 150, 255 },
+        },
+        UI.Label {
+            text = level.title .. " 完成",
+            fontSize = 15,
+            fontColor = { 200, 210, 230, 230 },
+        },
+    }
+
+    -- 奖励面板（预制积木解锁）
+    if rewardText ~= "" then
+        table.insert(popupChildren, UI.Panel {
+            width = "100%",
+            paddingTop = 8,
+            paddingBottom = 8,
+            paddingLeft = 12,
+            paddingRight = 12,
+            borderRadius = 6,
+            backgroundColor = { 40, 45, 60, 200 },
+            marginTop = 4,
+            children = {
+                UI.Label {
+                    text = rewardText,
+                    fontSize = 12,
+                    fontColor = { 200, 180, 255, 220 },
+                    numberOfLines = 3,
+                },
+            }
+        })
+    end
+
+    -- 新功能解锁通知（知识锁）
+    if newUnlock then
+        local featureNames = {
+            block_group = "积木组",
+            node_graph = "节点图",
+        }
+        local featureName = featureNames[newUnlock.featureId] or newUnlock.featureId
+        local unlockMsg = newUnlock.message or ("已解锁: " .. featureName)
+
+        table.insert(popupChildren, UI.Panel {
+            width = "100%",
+            paddingTop = 10,
+            paddingBottom = 10,
+            paddingLeft = 12,
+            paddingRight = 12,
+            borderRadius = 8,
+            backgroundColor = { 50, 30, 70, 220 },
+            borderWidth = 1,
+            borderColor = { 180, 100, 255, 180 },
+            marginTop = 8,
+            flexDirection = "column",
+            alignItems = "center",
+            gap = 4,
+            children = {
+                UI.Label {
+                    text = "新功能解锁！",
+                    fontSize = 13,
+                    fontColor = { 255, 200, 80, 255 },
+                },
+                UI.Label {
+                    text = unlockMsg,
+                    fontSize = 12,
+                    fontColor = { 220, 180, 255, 240 },
+                    textAlign = "center",
+                    numberOfLines = 2,
+                },
+            }
+        })
+    end
+
+    -- Boss 特殊文字
+    if isBoss then
+        table.insert(popupChildren, UI.Label {
+            text = "你已掌握 Lambda 演算的精髓！\n从三个基础积木到四则运算器，\n你就是 Lambda 大师！",
+            fontSize = 12,
+            fontColor = { 255, 220, 140, 200 },
+            numberOfLines = 4,
+            textAlign = "center",
+            marginTop = 4,
+        })
+    end
+
+    -- 按钮区
+    table.insert(popupChildren, UI.Panel {
+        flexDirection = "row",
+        gap = 12,
+        marginTop = 12,
+        children = {
+            UI.Button {
+                text = isBoss and "回到主菜单" or "下一关",
+                variant = "primary",
+                size = "md",
+                onClick = function()
+                    if onContinue then onContinue() end
+                end,
+            },
+            UI.Button {
+                text = "关卡选择",
+                variant = "outline",
+                size = "md",
+                onClick = function()
+                    if callbacks.onExitLevel then
+                        callbacks.onExitLevel()
+                    end
+                end,
+            },
+        }
+    })
 
     return UI.Panel {
         id = "victoryPopup",
@@ -577,72 +693,7 @@ function CampaignUI.createVictoryPopup(level, onContinue)
                 backgroundColor = { 25, 30, 45, 245 },
                 borderWidth = 2,
                 borderColor = isBoss and { 255, 200, 50, 200 } or { 80, 180, 120, 200 },
-                children = {
-                    UI.Label {
-                        text = isBoss and "通关！" or "正确！",
-                        fontSize = 24,
-                        fontColor = isBoss and { 255, 220, 80, 255 } or { 100, 255, 150, 255 },
-                    },
-                    UI.Label {
-                        text = level.title .. " 完成",
-                        fontSize = 15,
-                        fontColor = { 200, 210, 230, 230 },
-                    },
-                    -- 奖励
-                    UI.Panel {
-                        width = "100%",
-                        paddingTop = 8,
-                        paddingBottom = 8,
-                        paddingLeft = 12,
-                        paddingRight = 12,
-                        borderRadius = 6,
-                        backgroundColor = { 40, 45, 60, 200 },
-                        marginTop = 4,
-                        children = {
-                            UI.Label {
-                                text = rewardText,
-                                fontSize = 12,
-                                fontColor = { 200, 180, 255, 220 },
-                                numberOfLines = 3,
-                            },
-                        }
-                    },
-                    -- Boss 特殊文字
-                    isBoss and UI.Label {
-                        text = "你已掌握 Lambda 演算的精髓！\n从三个基础积木到四则运算器，\n你就是 Lambda 大师！",
-                        fontSize = 12,
-                        fontColor = { 255, 220, 140, 200 },
-                        numberOfLines = 4,
-                        textAlign = "center",
-                        marginTop = 4,
-                    } or UI.Panel {},
-                    -- 按钮
-                    UI.Panel {
-                        flexDirection = "row",
-                        gap = 12,
-                        marginTop = 12,
-                        children = {
-                            UI.Button {
-                                text = isBoss and "回到主菜单" or "下一关",
-                                variant = "primary",
-                                size = "md",
-                                onClick = function()
-                                    if onContinue then onContinue() end
-                                end,
-                            },
-                            UI.Button {
-                                text = "关卡选择",
-                                variant = "outline",
-                                size = "md",
-                                onClick = function()
-                                    if callbacks.onExitLevel then
-                                        callbacks.onExitLevel()
-                                    end
-                                end,
-                            },
-                        }
-                    },
-                }
+                children = popupChildren,
             },
         }
     }

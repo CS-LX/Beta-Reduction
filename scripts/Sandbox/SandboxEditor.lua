@@ -139,6 +139,7 @@ function M.addBlockToCurrent(kind)
         local presetFn = AST.Presets[name]
         if presetFn then
             block = mainCallbacks_.ASTToBlock(presetFn())
+            BlockDefs.wrapPresetAsGroup(block, name)
         end
     end
     if block then

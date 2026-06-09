@@ -517,6 +517,15 @@ function BlockCanvas:FindBlockAt(cx, cy)
 end
 
 function BlockCanvas:_hitTest(block, cx, cy)
+    -- 积木组 collapsed: 壳作为整体响应，不穿透到子块
+    if BlockDefs.isCollapsedGroup(block) then
+        local shellW = math.max(block.w, BlockDefs.GROUP_MIN_W)
+        if cx >= block.x and cx <= block.x + shellW
+            and cy >= block.y and cy <= block.y + block.h then
+            return block
+        end
+        return nil
+    end
     -- 先检查子积木（子积木在上层）
     for _, slot in pairs(block.slots) do
         if slot.child then
@@ -556,7 +565,14 @@ function BlockCanvas:OnPointerDown(event)
             local now = self.time_ or 0
             if self.lastClickBlock_ and self.lastClickBlock_.id == block.id
                 and (now - self.lastClickTime_) < self.DOUBLE_CLICK_TIME then
-                -- 触发双击
+                -- 积木组壳: 双击展开/收起
+                if block.group then
+                    self:_toggleGroup(block)
+                    self.lastClickBlock_ = nil
+                    self.lastClickTime_ = 0
+                    return true
+                end
+                -- 触发外部双击回调
                 if self.onBlockDoubleClick_ then
                     self.onBlockDoubleClick_(block)
                 end
@@ -684,6 +700,25 @@ function BlockCanvas:_refreshAll()
         BlockDefs.measure(block)
         BlockDefs.layout(block, block.x, block.y)
     end
+end
+
+--- 双击切换积木组壳的展开/收起状态
+function BlockCanvas:_toggleGroup(block)
+    if not block.group then return end
+    if block.group.collapsed then
+        -- 展开: 壳消失，内部积木显现
+        BlockDefs.expandGroup(block)
+    else
+        -- 收起前检查: 结构被破坏则移除积木组标记，不再可收起
+        if not BlockDefs.canCollapseGroup(block) then
+            block.group = nil  -- 结构已变，永久解除积木组
+            self:_refreshAll()
+            return
+        end
+        BlockDefs.collapseGroup(block)
+    end
+    -- 重新计算布局
+    self:_refreshAll()
 end
 
 -- ============================================================================
